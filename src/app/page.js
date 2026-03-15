@@ -146,15 +146,6 @@ export default function HomePage() {
   const sttSourceRef = useRef(null);
 
   const handleFinalResult = useCallback((text, panel) => {
-    // [LỚP BẢO VỆ PHẦN MỀM]: Nếu loa đang đọc, tự động bỏ qua văn bản thu được để chống vọng âm
-    if (typeof window !== 'undefined' && window.speechSynthesis && window.speechSynthesis.speaking) {
-      return;
-    }
-    // [LỚP BẢO VỆ PHẦN MỀM 2]: Bỏ qua triệt để mọi đoạn âm thu được trong vòng 1000ms ngay sau khi loa vừa đọc xong để đề phòng âm dội lại (echo)
-    if (window.ttsEndTime && Date.now() - window.ttsEndTime < 1000) {
-      return;
-    }
-
     // [BỘ LỌC TỪ RÁC]: Chặn các nhiễu do tiếng click chuột hoặc ngắt mic đột ngột tạo ra
     const cleanText = text.trim();
     const lowerText = cleanText.toLowerCase();
@@ -170,34 +161,16 @@ export default function HomePage() {
       queueTranslation(cleanText, LANGUAGES[srcIdx].translateCode, LANGUAGES[tgtIdx].translateCode, { apiKey, engine },
         async (origText, translated) => {
           setTargetBlocks(prev => [...prev, { text: translated, type: 'final', id: Date.now() }]);
-          
-          const isMicActive = (activeMicRef.current === 'source');
-          if (isMicActive && sttSourceRef.current) {
-            sttSourceRef.current.abort(); // [QUAN TRỌNG]: Dùng .abort() để diệt sạch buffer cũ, .stop() vẫn sẽ cố dịch tiếng trong buffer
-          }
-
+          // [FIX] Luôn phát âm thanh bản dịch sau khi dịch xong
           await speak(translated, LANGUAGES[tgtIdx].ttsCode);
-
-          if (isMicActive && activeMicRef.current === 'source' && sttSourceRef.current) {
-            sttSourceRef.current.start();
-          }
         });
     } else {
       setTargetBlocks(prev => [...prev, { text: cleanText, type: 'final', id: Date.now() }]);
       queueTranslation(cleanText, LANGUAGES[tgtIdx].translateCode, LANGUAGES[srcIdx].translateCode, { apiKey, engine },
         async (origText, translated) => {
           setSourceBlocks(prev => [...prev, { text: translated, type: 'final', id: Date.now() }]);
-          
-          const isMicActive = (activeMicRef.current === 'target');
-          if (isMicActive && sttSourceRef.current) {
-            sttSourceRef.current.abort();
-          }
-
+          // [FIX] Luôn phát âm thanh bản dịch sau khi dịch xong
           await speak(translated, LANGUAGES[srcIdx].ttsCode);
-
-          if (isMicActive && activeMicRef.current === 'target' && sttSourceRef.current) {
-            sttSourceRef.current.start();
-          }
         });
     }
   }, [srcIdx, tgtIdx, apiKey, engine, queueTranslation]);

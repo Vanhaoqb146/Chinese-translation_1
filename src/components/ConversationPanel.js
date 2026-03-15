@@ -18,7 +18,8 @@ export default function ConversationPanel({
   LANGUAGES,
 }) {
   const [history, setHistory] = useState([]);
-  const [convStatus, setConvStatus] = useState('idle'); // idle | recording | processing
+  const [convStatus, setConvStatus] = useState('idle'); // idle | recording | processing | speaking
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const logBodyRef = useRef(null);
 
   // ====== Callbacks cho hook ======
@@ -43,14 +44,21 @@ export default function ConversationPanel({
       item.id === id ? { ...item, target: translatedText } : item
     ));
 
+    // [FIX] Phát TTS tự động + vô hiệu hóa nút mic trong khi đang đọc
     const toSttCode = findSttCode(toLang);
-    await speak(translatedText, toSttCode);
-
-    setConvStatus('idle');
+    setIsSpeaking(true);
+    setConvStatus('speaking');
+    try {
+      await speak(translatedText, toSttCode);
+    } finally {
+      setIsSpeaking(false);
+      setConvStatus('idle');
+    }
   }, [speak, findSttCode]);
 
   const handleError = useCallback((msg) => {
     setConvStatus('idle');
+    setIsSpeaking(false);
     console.warn('PTT Error:', msg);
   }, []);
 
@@ -65,7 +73,7 @@ export default function ConversationPanel({
 
   // ====== NÚT PTT DUY NHẤT — Whisper tự nhận diện ngôn ngữ ======
   const handlePressStart = useCallback(() => {
-    if (ptt.isRecording || ptt.isProcessing) return;
+    if (ptt.isRecording || ptt.isProcessing || isSpeaking) return;
 
     // Truyền srcLang làm hint, nhưng Whisper sẽ tự phát hiện ngôn ngữ thật
     // và hook sẽ tự xác định chiều dịch (fromLang → toLang)
@@ -102,7 +110,7 @@ export default function ConversationPanel({
         <div className="ptt-group">
           <button
             className={`ptt-btn ${ptt.isRecording ? 'recording' : ''} ${ptt.isProcessing ? 'processing' : ''}`}
-            disabled={ptt.isProcessing}
+            disabled={ptt.isProcessing || isSpeaking}
             /* === Desktop events === */
             onMouseDown={(e) => { e.preventDefault(); handlePressStart(); }}
             onMouseUp={handlePressEnd}
@@ -114,7 +122,7 @@ export default function ConversationPanel({
             onContextMenu={(e) => e.preventDefault()}
           >
             <span className="ptt-btn-icon">
-              {ptt.isProcessing ? '⏳' : ptt.isRecording ? '⏹' : '🎤'}
+              {isSpeaking ? '🔊' : ptt.isProcessing ? '⏳' : ptt.isRecording ? '⏹' : '🎤'}
             </span>
             {ptt.isRecording && <span className="pulse-ring" />}
             {ptt.isRecording && <span className="pulse-ring p2" />}
@@ -125,6 +133,7 @@ export default function ConversationPanel({
             {convStatus === 'idle' && '👆 Nhấn giữ để nói'}
             {convStatus === 'recording' && '🔴 Đang thu âm...'}
             {convStatus === 'processing' && '⏳ Đang xử lý...'}
+            {convStatus === 'speaking' && '🔊 Đang phát âm...'}
           </div>
 
           {ptt.isRecording && (
