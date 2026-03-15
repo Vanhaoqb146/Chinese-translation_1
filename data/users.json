@@ -1,0 +1,32 @@
+[
+  {
+    "id": 1,
+    "username": "admin",
+    "password": "admin123",
+    "role": "admin",
+    "name": "Super Admin",
+    "unit": "All Units",
+    "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=admin",
+    "isActive": true
+  },
+  {
+    "id": 2,
+    "username": "user1",
+    "password": "123456",
+    "role": "user",
+    "name": "Nhân viên A",
+    "unit": "Đơn vị A",
+    "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=user1",
+    "isActive": true
+  },
+  {
+    "id": 3,
+    "username": "user2",
+    "password": "123456",
+    "role": "user",
+    "name": "Nhân viên B",
+    "unit": "Đơn vị B",
+    "avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=user2",
+    "isActive": true
+  }
+]

@@ -1,0 +1,220 @@
+'use client';
+import { useState, useRef, useCallback } from 'react';
+import useManualConversation from '@/hooks/useManualConversation';
+
+/**
+ * ConversationPanel — Giao diện chế độ "Giao tiếp" (Push-to-Talk)
+ *
+ * MỘT nút PTT trung tâm duy nhất. Whisper tự động nhận diện ngôn ngữ.
+ * Nhấn giữ để thu âm, buông tay để gửi.
+ */
+export default function ConversationPanel({
+  apiKey,
+  engine,
+  srcLang,
+  tgtLang,
+  speak,
+  findSttCode,
+  LANGUAGES,
+}) {
+  const [history, setHistory] = useState([]);
+  const [convStatus, setConvStatus] = useState('idle'); // idle | recording | processing
+  const logBodyRef = useRef(null);
+
+  // ====== Callbacks cho hook ======
+  const handleTranscribed = useCallback(({ originalText, detectedLang, fromLang, toLang, id }) => {
+    setConvStatus('processing');
+    setHistory(prev => [{
+      source: originalText,
+      target: '⏳ Đang dịch...',
+      fromLang,
+      toLang,
+      time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      id,
+    }, ...prev].slice(0, 100));
+
+    setTimeout(() => {
+      if (logBodyRef.current) logBodyRef.current.scrollTop = logBodyRef.current.scrollHeight;
+    }, 50);
+  }, []);
+
+  const handleResult = useCallback(async ({ translatedText, toLang, id }) => {
+    setHistory(prev => prev.map(item =>
+      item.id === id ? { ...item, target: translatedText } : item
+    ));
+
+    const toSttCode = findSttCode(toLang);
+    await speak(translatedText, toSttCode);
+
+    setConvStatus('idle');
+  }, [speak, findSttCode]);
+
+  const handleError = useCallback((msg) => {
+    setConvStatus('idle');
+    console.warn('PTT Error:', msg);
+  }, []);
+
+  // ====== Hook Push-to-Talk ======
+  const ptt = useManualConversation({
+    apiKey,
+    engine,
+    onTranscribed: handleTranscribed,
+    onResult: handleResult,
+    onError: handleError,
+  });
+
+  // ====== NÚT PTT DUY NHẤT — Whisper tự nhận diện ngôn ngữ ======
+  const handlePressStart = useCallback(() => {
+    if (ptt.isRecording || ptt.isProcessing) return;
+
+    // Truyền srcLang làm hint, nhưng Whisper sẽ tự phát hiện ngôn ngữ thật
+    // và hook sẽ tự xác định chiều dịch (fromLang → toLang)
+    setConvStatus('recording');
+    ptt.startRecording(srcLang.translateCode, tgtLang.translateCode);
+  }, [ptt, srcLang, tgtLang]);
+
+  const handlePressEnd = useCallback(() => {
+    if (!ptt.isRecording) return;
+    ptt.stopRecording();
+  }, [ptt]);
+
+  const handleClearHistory = useCallback(() => {
+    setHistory([]);
+    ptt.clearHistory();
+  }, [ptt]);
+
+  // ====== Helpers ======
+  const formatTime = (s) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  };
+
+  const getFlagForLang = (langCode) => {
+    const lang = LANGUAGES.find(l => l.translateCode === langCode);
+    return lang ? lang.flag : '🌐';
+  };
+
+  return (
+    <div className="conv-auto">
+      {/* ===== NÚT PTT TRUNG TÂM ===== */}
+      <div className="ptt-controls">
+        <div className="ptt-group">
+          <button
+            className={`ptt-btn ${ptt.isRecording ? 'recording' : ''} ${ptt.isProcessing ? 'processing' : ''}`}
+            disabled={ptt.isProcessing}
+            /* === Desktop events === */
+            onMouseDown={(e) => { e.preventDefault(); handlePressStart(); }}
+            onMouseUp={handlePressEnd}
+            onMouseLeave={handlePressEnd}
+            /* === Mobile events === */
+            onTouchStart={(e) => { e.preventDefault(); handlePressStart(); }}
+            onTouchEnd={handlePressEnd}
+            onTouchCancel={handlePressEnd}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <span className="ptt-btn-icon">
+              {ptt.isProcessing ? '⏳' : ptt.isRecording ? '⏹' : '🎤'}
+            </span>
+            {ptt.isRecording && <span className="pulse-ring" />}
+            {ptt.isRecording && <span className="pulse-ring p2" />}
+          </button>
+
+          {/* Trạng thái + Timer */}
+          <div className="ptt-hint" style={{ paddingTop: 0 }}>
+            {convStatus === 'idle' && '👆 Nhấn giữ để nói'}
+            {convStatus === 'recording' && '🔴 Đang thu âm...'}
+            {convStatus === 'processing' && '⏳ Đang xử lý...'}
+          </div>
+
+          {ptt.isRecording && (
+            <div className="ptt-timer">{formatTime(ptt.elapsed)}</div>
+          )}
+
+          <div className="ptt-auto-detect-label">
+            Tự động nhận diện {srcLang.flag} {srcLang.name} hoặc {tgtLang.flag} {tgtLang.name}
+          </div>
+        </div>
+      </div>
+
+      {/* ===== LỊCH SỬ HỘI THOẠI ===== */}
+      <div className="conv-log">
+        <div className="conv-log-header">
+          <span>💬 Cuộc hội thoại</span>
+          <div className="panel-actions">
+            <button onClick={handleClearHistory} title="Xóa">🗑️</button>
+          </div>
+        </div>
+        <div className="conv-log-body" ref={logBodyRef}>
+          {history.length === 0 && (
+            <div className="conv-empty">
+              <div className="conv-empty-icon">💬</div>
+              <div>Nhấn giữ nút micro để bắt đầu</div>
+              <div className="conv-empty-sub">
+                Nói {srcLang.flag} {srcLang.name} hoặc {tgtLang.flag} {tgtLang.name} — Tự động nhận diện!
+              </div>
+            </div>
+          )}
+          {history.slice().reverse().map((h) => {
+            const isSourceSpeaker = h.fromLang === srcLang.translateCode;
+            const alignment = isSourceSpeaker ? 'flex-start' : 'flex-end';
+            const bubbleBg = isSourceSpeaker ? 'white' : 'linear-gradient(135deg, #8b5cf6, #d946ef)';
+            const textColor = isSourceSpeaker ? '#1f2937' : 'white';
+            const borderColor = isSourceSpeaker ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.2)';
+
+            return (
+              <div key={h.id} style={{ display: 'flex', flexDirection: 'column', alignItems: alignment, marginBottom: '20px', width: '100%' }}>
+                <div style={{
+                  background: bubbleBg,
+                  color: textColor,
+                  padding: '12px 16px',
+                  borderRadius: '16px',
+                  maxWidth: '85%',
+                  boxShadow: '0 4px 15px rgba(0,0,0,0.05)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px'
+                }}>
+                  {/* CÂU GỐC */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${borderColor}`, paddingBottom: '8px' }}>
+                    <span style={{ fontSize: '15px', fontWeight: '500', lineHeight: '1.4' }}>
+                      <span style={{ fontSize: '12px', opacity: 0.8, marginRight: '8px' }}>
+                        {getFlagForLang(h.fromLang)}
+                      </span>
+                      {h.source}
+                    </span>
+                    <button
+                      onClick={() => speak(h.source, findSttCode(h.fromLang))}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', opacity: 0.8, marginLeft: '12px', color: textColor }}
+                      title="Nghe lại câu gốc"
+                    >🔊</button>
+                  </div>
+
+                  {/* CÂU DỊCH */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '15px', lineHeight: '1.4' }}>
+                      <span style={{ fontSize: '12px', opacity: 0.8, marginRight: '8px' }}>
+                        {getFlagForLang(h.toLang)}
+                      </span>
+                      {h.target}
+                    </span>
+                    <button
+                      onClick={() => speak(h.target, findSttCode(h.toLang))}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', opacity: 0.8, marginLeft: '12px', color: textColor }}
+                      title="Nghe lại bản dịch"
+                    >🔊</button>
+                  </div>
+                </div>
+
+                {/* THỜI GIAN */}
+                <span style={{ fontSize: '11px', opacity: 0.5, marginTop: '4px', padding: '0 8px' }}>
+                  {h.time}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
