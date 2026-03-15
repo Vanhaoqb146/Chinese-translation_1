@@ -17,8 +17,9 @@ export default function ConversationPanel({
   speak,
   findSttCode,
   LANGUAGES,
+  history,
+  setHistory,
 }) {
-  const [history, setHistory] = useState([]);
   const [convStatus, setConvStatus] = useState('idle');
   // idle | listening | processing | speaking
   const [isSpeaking, setIsSpeaking] = useState(false);

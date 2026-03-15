@@ -244,7 +244,7 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
     clearTimeout(maxTimerRef.current);
     if (processorRef.current) processorRef.current.disconnect();
     if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-    if (audioContextRef.current) audioContextRef.current.close();
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') audioContextRef.current.close();
   }, []);
 
   const pause = useCallback(() => {

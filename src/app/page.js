@@ -42,6 +42,7 @@ export default function HomePage() {
   const [activeMic, setActiveMic] = useState(null);
   const activeMicRef = useRef(null);
   const [history, setHistory] = useState([]);
+  const [convHistory, setConvHistory] = useState([]);
 
   useEffect(() => { activeMicRef.current = activeMic; }, [activeMic]);
   const [toast, setToast] = useState('');
@@ -270,6 +271,8 @@ export default function HomePage() {
       speak={speak}
       findSttCode={findSttCode}
       LANGUAGES={LANGUAGES}
+      history={convHistory}
+      setHistory={setConvHistory}
     />
   );
 
