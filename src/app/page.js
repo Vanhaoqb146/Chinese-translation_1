@@ -146,22 +146,21 @@ export default function HomePage() {
   const sttSourceRef = useRef(null);
 
   const handleFinalResult = useCallback((text, panel) => {
-    // [BỘ LỌC TỪ RÁC]: Chặn các nhiễu do tiếng click chuột hoặc ngắt mic đột ngột tạo ra
     const cleanText = text.trim();
     const lowerText = cleanText.toLowerCase();
     const noiseWords = ['phẩy.', 'chấm.', 'phẩy', 'chấm', ',', '.', '?', '!'];
+    if (!cleanText || noiseWords.includes(lowerText)) return;
 
-    // Nếu text trống hoặc chỉ chứa đúng từ rác -> Lập tức hủy bỏ, không dịch
-    if (!cleanText || noiseWords.includes(lowerText)) {
-      return;
-    }
+    // [KEY] Auto-stop mic khi có kết quả cuối cùng
+    // (continuous=false nên recognition đã tự dừng, sync UI state)
+    setActiveMic(null);
+    setInterimText('');
 
     if (panel === 'source') {
       setSourceBlocks(prev => [...prev, { text: cleanText, type: 'final', id: Date.now() }]);
       queueTranslation(cleanText, LANGUAGES[srcIdx].translateCode, LANGUAGES[tgtIdx].translateCode, { apiKey, engine },
         async (origText, translated) => {
           setTargetBlocks(prev => [...prev, { text: translated, type: 'final', id: Date.now() }]);
-          // [FIX] Luôn phát âm thanh bản dịch sau khi dịch xong
           await speak(translated, LANGUAGES[tgtIdx].ttsCode);
         });
     } else {
@@ -169,7 +168,6 @@ export default function HomePage() {
       queueTranslation(cleanText, LANGUAGES[tgtIdx].translateCode, LANGUAGES[srcIdx].translateCode, { apiKey, engine },
         async (origText, translated) => {
           setSourceBlocks(prev => [...prev, { text: translated, type: 'final', id: Date.now() }]);
-          // [FIX] Luôn phát âm thanh bản dịch sau khi dịch xong
           await speak(translated, LANGUAGES[srcIdx].ttsCode);
         });
     }
@@ -178,9 +176,6 @@ export default function HomePage() {
   const handleFinalResultSource = useCallback((t) => handleFinalResult(t, 'source'), [handleFinalResult]);
 
   const handleInterimResult = useCallback((text) => {
-    // Chống nhiễu ngay cả khi đang hiển thị chữ tạm thời (interim)
-    if (typeof window !== 'undefined' && window.speechSynthesis && window.speechSynthesis.speaking) return;
-    if (window.ttsEndTime && Date.now() - window.ttsEndTime < 1000) return;
     setInterimText(text);
   }, []);
 
@@ -209,13 +204,13 @@ export default function HomePage() {
   const toggleMic = (panel) => {
     if (viewMode === 'conversation') return;
     if (activeMic === panel) {
-      // [FIX BUG 1] stop() bây giờ sẽ tự flush session buffer qua onResult
-      // → handleFinalResult sẽ tự được gọi 1 lần duy nhất với toàn bộ câu
-      // → Không cần gọi flush() thủ công nữa (tránh dịch 2 lần)
+      // User bấm dừng thủ công
       if (sttSourceRef.current) sttSourceRef.current.stop();
-      setActiveMic(null); setInterimText('');
+      setActiveMic(null);
+      setInterimText('');
     } else {
-      if (activeMic && sttSourceRef.current) sttSourceRef.current.stop();
+      // Bắt đầu nghe - dừng phiên cũ nếu có
+      if (activeMic && sttSourceRef.current) sttSourceRef.current.abort();
       if (sttSourceRef.current) sttSourceRef.current.start();
       setActiveMic(panel);
     }

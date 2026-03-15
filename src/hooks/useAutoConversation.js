@@ -7,7 +7,7 @@ const MIN_RECORD_DURATION = 800; // Tăng lên 0.8s để tránh cắt vụn t�
 const MAX_RECORD_DURATION = 7000;
 const PRE_ROLL_MS = 500; // Bộ đệm 0.5s
 
-const WHISPER_LANG_MAP = { chinese: 'zh', mandarin: 'zh', vietnamese: 'vi' };
+const WHISPER_LANG_MAP = { chinese: 'zh', mandarin: 'zh', vietnamese: 'vi', english: 'en', japanese: 'ja', korean: 'ko' };
 
 // Nhà máy đóng gói sóng âm PCM thành file WAV chuẩn xác 100%
 const exportWAV = (preRollBuffers, recordingBuffers, sampleRate) => {
@@ -71,6 +71,9 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
       const formData = new FormData();
       formData.append('audio', audioBlob, 'audio.wav');
       formData.append('apiKey', apiKey);
+      // Gửi language hints để Whisper ưu tiên nhận diện đúng ngôn ngữ
+      formData.append('srcLang', srcLangCode);
+      formData.append('tgtLang', tgtLangCode);
 
       const whisperRes = await fetch('/api/whisper', { method: 'POST', body: formData });
       const whisperData = await whisperRes.json();
@@ -85,9 +88,20 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
 
       if (onLangDetected) onLangDetected(langCode);
 
+      // [FIX] Generic language routing — không hardcode Vietnamese
+      // Nếu Whisper phát hiện đúng ngôn ngữ nguồn → dịch sang đích, và ngược lại
       let fromLang, toLang;
-      if (langCode === 'vi') { fromLang = 'vi'; toLang = (srcLangCode === 'vi') ? tgtLangCode : srcLangCode; }
-      else { fromLang = langCode || (srcLangCode !== 'vi' ? srcLangCode : tgtLangCode); toLang = 'vi'; }
+      if (langCode === srcLangCode) {
+        fromLang = srcLangCode;
+        toLang = tgtLangCode;
+      } else if (langCode === tgtLangCode) {
+        fromLang = tgtLangCode;
+        toLang = srcLangCode;
+      } else {
+        // Whisper trả về ngôn ngữ không khớp → fallback: dùng srcLang
+        fromLang = srcLangCode;
+        toLang = tgtLangCode;
+      }
 
       const recordId = Date.now();
       if (onTranscribed) onTranscribed({ originalText: text, detectedLang: langCode, fromLang, toLang, id: recordId });

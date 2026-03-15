@@ -5,7 +5,7 @@ import { NextResponse } from 'next/server';
 // =============================================
 
 // CHỈ cho phép Tiếng Việt và Tiếng Trung đi qua
-const ALLOWED_LANGS = ['vietnamese', 'chinese', 'mandarin', 'vi', 'zh'];
+const ALLOWED_LANGS = ['vietnamese', 'chinese', 'mandarin', 'vi', 'zh', 'english', 'en', 'japanese', 'ja', 'korean', 'ko'];
 
 // Danh sách "từ ma" (hallucination) mà Whisper thường bịa ra khi thu im lặng/tiếng ồn
 const BAD_PHRASES = [
@@ -38,9 +38,15 @@ export async function POST(request) {
     const formData = await request.formData();
     const audioFile = formData.get('audio');
     const apiKey = formData.get('apiKey') || process.env.OPENAI_API_KEY || '';
+    // Language hints từ frontend
+    const srcLang = formData.get('srcLang') || '';
+    const tgtLang = formData.get('tgtLang') || '';
 
     if (!audioFile) return NextResponse.json({ error: 'No audio file' }, { status: 400 });
     if (!apiKey) return NextResponse.json({ error: 'No API key.' }, { status: 400 });
+
+    // Bản đồ mã ngôn ngữ app → mã ISO 639-1 cho Whisper
+    const LANG_TO_ISO = { vi: 'vi', zh: 'zh', en: 'en', ja: 'ja', ko: 'ko' };
 
     const whisperForm = new FormData();
     const originalName = audioFile.name || 'audio.webm';
@@ -48,6 +54,12 @@ export async function POST(request) {
     whisperForm.append('file', audioFile, `audio.${ext}`);
     whisperForm.append('model', 'whisper-1');
     whisperForm.append('temperature', '0.0');
+
+    // [FIX] Gửi language hint cho Whisper để tăng độ chính xác
+    // Ưu tiên srcLang vì user thường nói ngôn ngữ nguồn
+    if (srcLang && LANG_TO_ISO[srcLang]) {
+      whisperForm.append('language', LANG_TO_ISO[srcLang]);
+    }
 
     const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',

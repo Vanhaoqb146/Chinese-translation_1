@@ -1,212 +1,132 @@
 'use client';
 import { useState, useRef, useCallback, useEffect } from 'react';
 
-const KEEPALIVE_TIMEOUT = 8000;
-const KEEPALIVE_CHECK = 3000;
-const AUTO_FLUSH_DELAY = 2000; // Tự động dịch sau 2 giây im lặng
-
+/**
+ * useSpeechRecognition — Hook cho chế độ "Dịch Thuật" (Standard Mode)
+ *
+ * Logic đơn giản & đáng tin cậy:
+ * 1. User bấm "Nói" → bắt đầu nhận diện giọng nói (continuous=false)
+ * 2. Hiển thị interimResults real-time khi user nói
+ * 3. Khi user ngừng nói → Web Speech API tự động dừng → trả về isFinal
+ * 4. Gọi onResult(text) → dịch → TTS
+ * 5. Mic tự tắt, user bấm "Nói" để nói câu tiếp
+ *
+ * KHÔNG dùng continuous=true → Tránh triệt để mọi lỗi lặp/echo
+ */
 export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInterim, onError }) {
   const [isRecording, setIsRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  const wantRecording = useRef(false);
   const recognitionRef = useRef(null);
-  const lastResultTime = useRef(0);
   const startTime = useRef(0);
   const timerRef = useRef(null);
-  const keepAliveRef = useRef(null);
-  const restartCount = useRef(0);
+  const isActiveRef = useRef(false);
 
-  // Đếm số lượng isFinal results đã được commit (đã gửi qua onResult)
-  // Khi recognition restart, event.results bắt đầu lại từ 0,
-  // nhưng committedCount reset để tránh trùng lặp
-  const committedCountRef = useRef(0);
-  // Buffer tạm: thành phần isFinal chưa commit trong phiên recognition hiện tại
-  const pendingFinalRef = useRef('');
-  // Timer tự động flush sau khi ngừng nói
-  const autoFlushTimerRef = useRef(null);
-
-  // Callback refs để tránh stale closures
+  // Callback refs để tránh stale closures trong recognition callbacks
   const onResultRef = useRef(onResult);
   const onInterimRef = useRef(onInterim);
+  const onErrorRef = useRef(onError);
   useEffect(() => { onResultRef.current = onResult; }, [onResult]);
   useEffect(() => { onInterimRef.current = onInterim; }, [onInterim]);
+  useEffect(() => { onErrorRef.current = onError; }, [onError]);
 
-  // Flush pending finals: gửi text chưa commit qua onResult, reset counter
-  const flushPending = useCallback(() => {
-    clearTimeout(autoFlushTimerRef.current);
-    const text = pendingFinalRef.current.trim();
-    if (text && onResultRef.current) {
-      onResultRef.current(text);
-    }
-    pendingFinalRef.current = '';
-    committedCountRef.current = 0;
-
-    // Sau khi flush, restart recognition để reset event.results
-    // (tránh event.results cũ chứa text đã commit → hiển thị lại)
-    if (wantRecording.current && recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch (_) {}
-      // onend sẽ tự restart vì wantRecording=true
-    }
+  const cleanup = useCallback(() => {
+    clearInterval(timerRef.current);
+    isActiveRef.current = false;
+    setIsRecording(false);
   }, []);
 
-  const createRecognition = useCallback(() => {
-    if (typeof window === 'undefined') return null;
+  const start = useCallback(() => {
+    if (typeof window === 'undefined') return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return null;
+    if (!SR) return;
+
+    // Dừng phiên cũ nếu có
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (_) {}
+    }
 
     const rec = new SR();
-    rec.continuous = true;
-    rec.interimResults = true;
+    rec.continuous = false;      // [KEY] Tự dừng khi user ngừng nói
+    rec.interimResults = true;   // Hiển thị real-time
     rec.lang = lang;
     rec.maxAlternatives = 1;
 
     rec.onstart = () => {
-      lastResultTime.current = Date.now();
-      // Reset tracking cho phiên recognition mới
-      committedCountRef.current = 0;
-      pendingFinalRef.current = '';
       setIsRecording(true);
     };
 
     rec.onresult = (event) => {
-      lastResultTime.current = Date.now();
-
-      // Đếm số isFinal results trong event.results hiện tại
-      let newFinal = '';
-      let currentInterim = '';
-      let finalCount = 0;
+      let finalText = '';
+      let interimText = '';
 
       for (let i = 0; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript.trim();
         if (event.results[i].isFinal) {
-          finalCount++;
-          // Chỉ lấy các isFinal MỚI (chưa commit)
-          if (finalCount > committedCountRef.current) {
-            newFinal += transcript + ' ';
-          }
+          finalText += transcript + ' ';
         } else {
-          currentInterim += transcript + ' ';
+          interimText += transcript + ' ';
         }
       }
 
-      // Cập nhật pending buffer với text mới
-      if (newFinal) {
-        pendingFinalRef.current += newFinal;
-      }
-
-      // Hiển thị UI: pending (chưa commit) + interim
-      const displayText = (pendingFinalRef.current + currentInterim).trim();
-      if (onInterimRef.current) onInterimRef.current(displayText || '');
-
-      // [AUTO-FLUSH] Reset timer mỗi khi có kết quả mới
-      // Nếu có isFinal mới, sau AUTO_FLUSH_DELAY giây im lặng sẽ tự động flush
-      if (newFinal) {
-        clearTimeout(autoFlushTimerRef.current);
-        autoFlushTimerRef.current = setTimeout(() => {
-          if (pendingFinalRef.current.trim()) {
-            flushPending();
-            // Xóa interim text sau khi đã commit
-            if (onInterimRef.current) onInterimRef.current('');
-          }
-        }, AUTO_FLUSH_DELAY);
+      if (finalText.trim()) {
+        // Có kết quả cuối cùng → gọi onResult
+        if (onInterimRef.current) onInterimRef.current(''); // Xóa interim
+        if (onResultRef.current) onResultRef.current(finalText.trim());
+      } else if (interimText.trim()) {
+        // Chỉ có interim → hiển thị tạm
+        if (onInterimRef.current) onInterimRef.current(interimText.trim());
       }
     };
 
     rec.onerror = (event) => {
-      if (onError) onError(event.error);
-      if (event.error === 'not-allowed' || event.error === 'audio-capture') {
-        wantRecording.current = false;
-        setIsRecording(false);
-      }
+      if (onErrorRef.current) onErrorRef.current(event.error);
+      // Không cleanup ở đây — onend sẽ lo
     };
 
     rec.onend = () => {
-      setIsRecording(false);
-      if (wantRecording.current) {
-        restartCount.current++;
-        // event.results sẽ reset khi tạo instance mới
-        // committedCountRef cũng đã reset trong onstart
-        try {
-          recognitionRef.current = createRecognition();
-          if (recognitionRef.current) recognitionRef.current.start();
-        } catch (e) {
-          setTimeout(() => {
-            if (wantRecording.current) {
-              try {
-                recognitionRef.current = createRecognition();
-                if (recognitionRef.current) recognitionRef.current.start();
-              } catch (_) {}
-            }
-          }, 200);
-        }
-      }
+      // Recognition tự dừng (continuous=false) hoặc bị lỗi
+      cleanup();
     };
 
-    return rec;
-  }, [lang, onError, flushPending]);
-
-  const start = useCallback(() => {
-    wantRecording.current = true;
-    restartCount.current = 0;
+    recognitionRef.current = rec;
+    isActiveRef.current = true;
     startTime.current = Date.now();
-    lastResultTime.current = Date.now();
-    committedCountRef.current = 0;
-    pendingFinalRef.current = '';
-    clearTimeout(autoFlushTimerRef.current);
     setElapsed(0);
 
+    // Timer đếm giây
     timerRef.current = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startTime.current) / 1000));
     }, 1000);
 
-    keepAliveRef.current = setInterval(() => {
-      if (!wantRecording.current) return;
-      if (Date.now() - lastResultTime.current > KEEPALIVE_TIMEOUT && recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch (_) {}
-      }
-    }, KEEPALIVE_CHECK);
-
-    recognitionRef.current = createRecognition();
-    if (recognitionRef.current) {
-      recognitionRef.current.start();
+    try {
+      rec.start();
+    } catch (e) {
+      cleanup();
+      if (onErrorRef.current) onErrorRef.current('start-failed');
     }
-  }, [createRecognition]);
+  }, [lang, cleanup]);
 
   const stop = useCallback(() => {
-    wantRecording.current = false;
-    clearInterval(timerRef.current);
-    clearInterval(keepAliveRef.current);
-    clearTimeout(autoFlushTimerRef.current);
-    try { if (recognitionRef.current) recognitionRef.current.stop(); } catch (_) {}
-    setIsRecording(false);
-
-    // Flush toàn bộ pending text khi dừng mic thủ công
-    const finalText = pendingFinalRef.current.trim();
-    pendingFinalRef.current = '';
-    committedCountRef.current = 0;
-    if (finalText && onResultRef.current) {
-      onResultRef.current(finalText);
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (_) {}
     }
-  }, []);
+    cleanup();
+  }, [cleanup]);
 
   const abort = useCallback(() => {
-    wantRecording.current = false;
-    clearInterval(timerRef.current);
-    clearInterval(keepAliveRef.current);
-    clearTimeout(autoFlushTimerRef.current);
-    try { if (recognitionRef.current) recognitionRef.current.abort(); } catch (_) {}
-    setIsRecording(false);
-    pendingFinalRef.current = '';
-    committedCountRef.current = 0;
-  }, []);
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (_) {}
+    }
+    cleanup();
+    if (onInterimRef.current) onInterimRef.current('');
+  }, [cleanup]);
 
   useEffect(() => {
     return () => {
-      wantRecording.current = false;
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (_) {}
+      }
       clearInterval(timerRef.current);
-      clearInterval(keepAliveRef.current);
-      clearTimeout(autoFlushTimerRef.current);
-      try { if (recognitionRef.current) recognitionRef.current.stop(); } catch (_) {}
     };
   }, []);
 
