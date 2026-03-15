@@ -2,10 +2,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 const SILENCE_THRESHOLD = 0.01; // Hạ xuống 0.01 dư sức bắt trọn vẹn phụ âm mềm của Tiếng Việt
-const SILENCE_DURATION = 1000;
-const MIN_RECORD_DURATION = 800; // Tăng lên 0.8s để tránh cắt vụn từng chữ một
-const MAX_RECORD_DURATION = 7000;
-const PRE_ROLL_MS = 500; // Bộ đệm 0.5s
+const SILENCE_DURATION = 1200; // Tăng lên 1.2s để ổn định hơn, tránh cắt giữa câu
+const MIN_RECORD_DURATION = 600; // Hạ xuống 0.6s để bắt được các câu ngắn hơn
+const MAX_RECORD_DURATION = 10000;
+const PRE_ROLL_MS = 800; // [FIX] Tăng bộ đệm lên 0.8s để không bị mất đầu câu
 
 const WHISPER_LANG_MAP = { chinese: 'zh', mandarin: 'zh', vietnamese: 'vi', english: 'en', japanese: 'ja', korean: 'ko' };
 

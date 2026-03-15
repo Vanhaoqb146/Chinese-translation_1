@@ -110,33 +110,39 @@ export default function HomePage() {
     return new Promise((resolve) => {
       if (!text || typeof window === 'undefined' || !window.speechSynthesis) return resolve();
 
-      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
-      const chunks = text.match(/[^。！？.!?\n]+[。！？.!?\n]?/g) || [text];
-      const voice = findVoice(langCode);
-      let i = 0;
+      // [FIX] Xóa mọi utterance cũ/bị kẹt trước khi phát mới
+      // Trên Chrome Mobile, queue TTS hay bị đơ sau lần phát đầu tiên
+      window.speechSynthesis.cancel();
 
-      const next = () => {
-        if (i >= chunks.length) {
-          resolve();
-          return;
-        }
+      // Đợi 1 tick để cancel hoàn tất trước khi phát mới
+      setTimeout(() => {
+        const chunks = text.match(/[^。！？.!?\n]+[。！？.!?\n]?/g) || [text];
+        const voice = findVoice(langCode);
+        let i = 0;
 
-        const chunk = chunks[i].trim();
-        if (!chunk) { i++; next(); return; }
+        const next = () => {
+          if (i >= chunks.length) {
+            resolve();
+            return;
+          }
 
-        const u = new SpeechSynthesisUtterance(chunk);
-        u.rate = 1.0; u.lang = langCode;
-        if (voice) { u.voice = voice; u.lang = voice.lang; }
+          const chunk = chunks[i].trim();
+          if (!chunk) { i++; next(); return; }
 
-        const keepAlive = setInterval(() => { if (window.speechSynthesis.speaking) { window.speechSynthesis.pause(); window.speechSynthesis.resume(); } }, 5000);
-        const timeout = setTimeout(() => { clearInterval(keepAlive); window.speechSynthesis.cancel(); resolve(); }, 30000);
+          const u = new SpeechSynthesisUtterance(chunk);
+          u.rate = 1.0; u.lang = langCode;
+          if (voice) { u.voice = voice; u.lang = voice.lang; }
 
-        u.onend = () => { clearInterval(keepAlive); clearTimeout(timeout); window.ttsEndTime = Date.now(); i++; next(); };
-        u.onerror = () => { clearInterval(keepAlive); clearTimeout(timeout); window.ttsEndTime = Date.now(); i++; next(); };
+          const keepAlive = setInterval(() => { if (window.speechSynthesis.speaking) { window.speechSynthesis.pause(); window.speechSynthesis.resume(); } }, 5000);
+          const timeout = setTimeout(() => { clearInterval(keepAlive); window.speechSynthesis.cancel(); resolve(); }, 30000);
 
-        window.speechSynthesis.speak(u);
-      };
-      next();
+          u.onend = () => { clearInterval(keepAlive); clearTimeout(timeout); window.ttsEndTime = Date.now(); i++; next(); };
+          u.onerror = () => { clearInterval(keepAlive); clearTimeout(timeout); window.ttsEndTime = Date.now(); i++; next(); };
+
+          window.speechSynthesis.speak(u);
+        };
+        next();
+      }, 50);
     });
   };
 

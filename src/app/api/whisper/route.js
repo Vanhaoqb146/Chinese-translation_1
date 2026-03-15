@@ -16,7 +16,7 @@ const BAD_PHRASES = [
   'đăng ký', 'theo dõi', 'tạm biệt', 'hẹn gặp lại',
   'cảm ơn các bạn', 'chào mừng các bạn', 'video tiếp theo',
   'nhấn like', 'chia sẻ', 'bình luận',
-  'chào mừng bạn', 'xin chào',
+  'chào mừng bạn',
   '点赞', '订阅', '转发', '打赏', '明镜', '字幕',
   '谢谢观看', '谢谢大家', '再见', '感谢收看',
   '欢迎', '关注',
