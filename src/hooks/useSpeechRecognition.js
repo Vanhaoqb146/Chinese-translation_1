@@ -3,6 +3,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 
 const KEEPALIVE_TIMEOUT = 8000;
 const KEEPALIVE_CHECK = 3000;
+const AUTO_FLUSH_DELAY = 2000; // Tự động dịch sau 2 giây im lặng
 
 export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInterim, onError }) {
   const [isRecording, setIsRecording] = useState(false);
@@ -15,9 +16,38 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
   const keepAliveRef = useRef(null);
   const restartCount = useRef(0);
 
-  // Session buffer: chứa toàn bộ text đã committed (isFinal) trong phiên hiện tại.
-  // Chỉ flush qua onResult khi user nhấn "Dừng".
-  const sessionBufferRef = useRef('');
+  // Đếm số lượng isFinal results đã được commit (đã gửi qua onResult)
+  // Khi recognition restart, event.results bắt đầu lại từ 0,
+  // nhưng committedCount reset để tránh trùng lặp
+  const committedCountRef = useRef(0);
+  // Buffer tạm: thành phần isFinal chưa commit trong phiên recognition hiện tại
+  const pendingFinalRef = useRef('');
+  // Timer tự động flush sau khi ngừng nói
+  const autoFlushTimerRef = useRef(null);
+
+  // Callback refs để tránh stale closures
+  const onResultRef = useRef(onResult);
+  const onInterimRef = useRef(onInterim);
+  useEffect(() => { onResultRef.current = onResult; }, [onResult]);
+  useEffect(() => { onInterimRef.current = onInterim; }, [onInterim]);
+
+  // Flush pending finals: gửi text chưa commit qua onResult, reset counter
+  const flushPending = useCallback(() => {
+    clearTimeout(autoFlushTimerRef.current);
+    const text = pendingFinalRef.current.trim();
+    if (text && onResultRef.current) {
+      onResultRef.current(text);
+    }
+    pendingFinalRef.current = '';
+    committedCountRef.current = 0;
+
+    // Sau khi flush, restart recognition để reset event.results
+    // (tránh event.results cũ chứa text đã commit → hiển thị lại)
+    if (wantRecording.current && recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch (_) {}
+      // onend sẽ tự restart vì wantRecording=true
+    }
+  }, []);
 
   const createRecognition = useCallback(() => {
     if (typeof window === 'undefined') return null;
@@ -32,33 +62,54 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
 
     rec.onstart = () => {
       lastResultTime.current = Date.now();
+      // Reset tracking cho phiên recognition mới
+      committedCountRef.current = 0;
+      pendingFinalRef.current = '';
       setIsRecording(true);
     };
 
     rec.onresult = (event) => {
       lastResultTime.current = Date.now();
 
-      // [FIX] Rebuild final + interim từ TOÀN BỘ event.results (index 0 → length)
-      // Web Speech API giữ lại mọi results cũ trong mảng khi continuous=true.
-      // KHÔNG dùng event.resultIndex để append — sẽ gây lặp trùng.
-      let allFinal = '';
+      // Đếm số isFinal results trong event.results hiện tại
+      let newFinal = '';
       let currentInterim = '';
+      let finalCount = 0;
 
       for (let i = 0; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript.trim();
         if (event.results[i].isFinal) {
-          allFinal += transcript + ' ';
+          finalCount++;
+          // Chỉ lấy các isFinal MỚI (chưa commit)
+          if (finalCount > committedCountRef.current) {
+            newFinal += transcript + ' ';
+          }
         } else {
           currentInterim += transcript + ' ';
         }
       }
 
-      // Cập nhật session buffer = tất cả text đã isFinal (rebuild mỗi lần, không append)
-      sessionBufferRef.current = allFinal;
+      // Cập nhật pending buffer với text mới
+      if (newFinal) {
+        pendingFinalRef.current += newFinal;
+      }
 
-      // Hiển thị UI: toàn bộ final đã tích lũy + đoạn interim đang gõ
-      const displayText = (allFinal + currentInterim).trim();
-      if (onInterim) onInterim(displayText || '');
+      // Hiển thị UI: pending (chưa commit) + interim
+      const displayText = (pendingFinalRef.current + currentInterim).trim();
+      if (onInterimRef.current) onInterimRef.current(displayText || '');
+
+      // [AUTO-FLUSH] Reset timer mỗi khi có kết quả mới
+      // Nếu có isFinal mới, sau AUTO_FLUSH_DELAY giây im lặng sẽ tự động flush
+      if (newFinal) {
+        clearTimeout(autoFlushTimerRef.current);
+        autoFlushTimerRef.current = setTimeout(() => {
+          if (pendingFinalRef.current.trim()) {
+            flushPending();
+            // Xóa interim text sau khi đã commit
+            if (onInterimRef.current) onInterimRef.current('');
+          }
+        }, AUTO_FLUSH_DELAY);
+      }
     };
 
     rec.onerror = (event) => {
@@ -73,6 +124,8 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
       setIsRecording(false);
       if (wantRecording.current) {
         restartCount.current++;
+        // event.results sẽ reset khi tạo instance mới
+        // committedCountRef cũng đã reset trong onstart
         try {
           recognitionRef.current = createRecognition();
           if (recognitionRef.current) recognitionRef.current.start();
@@ -90,14 +143,16 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
     };
 
     return rec;
-  }, [lang, onInterim, onError]);
+  }, [lang, onError, flushPending]);
 
   const start = useCallback(() => {
     wantRecording.current = true;
     restartCount.current = 0;
     startTime.current = Date.now();
     lastResultTime.current = Date.now();
-    sessionBufferRef.current = '';
+    committedCountRef.current = 0;
+    pendingFinalRef.current = '';
+    clearTimeout(autoFlushTimerRef.current);
     setElapsed(0);
 
     timerRef.current = setInterval(() => {
@@ -121,24 +176,28 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
     wantRecording.current = false;
     clearInterval(timerRef.current);
     clearInterval(keepAliveRef.current);
+    clearTimeout(autoFlushTimerRef.current);
     try { if (recognitionRef.current) recognitionRef.current.stop(); } catch (_) {}
     setIsRecording(false);
 
-    // Flush toàn bộ session buffer qua onResult khi dừng mic
-    const finalText = sessionBufferRef.current.trim();
-    sessionBufferRef.current = '';
-    if (finalText && onResult) {
-      onResult(finalText);
+    // Flush toàn bộ pending text khi dừng mic thủ công
+    const finalText = pendingFinalRef.current.trim();
+    pendingFinalRef.current = '';
+    committedCountRef.current = 0;
+    if (finalText && onResultRef.current) {
+      onResultRef.current(finalText);
     }
-  }, [onResult]);
+  }, []);
 
   const abort = useCallback(() => {
     wantRecording.current = false;
     clearInterval(timerRef.current);
     clearInterval(keepAliveRef.current);
+    clearTimeout(autoFlushTimerRef.current);
     try { if (recognitionRef.current) recognitionRef.current.abort(); } catch (_) {}
     setIsRecording(false);
-    sessionBufferRef.current = '';
+    pendingFinalRef.current = '';
+    committedCountRef.current = 0;
   }, []);
 
   useEffect(() => {
@@ -146,6 +205,7 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
       wantRecording.current = false;
       clearInterval(timerRef.current);
       clearInterval(keepAliveRef.current);
+      clearTimeout(autoFlushTimerRef.current);
       try { if (recognitionRef.current) recognitionRef.current.stop(); } catch (_) {}
     };
   }, []);

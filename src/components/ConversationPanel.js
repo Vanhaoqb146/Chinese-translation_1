@@ -1,12 +1,13 @@
 'use client';
 import { useState, useRef, useCallback } from 'react';
-import useManualConversation from '@/hooks/useManualConversation';
+import useAutoConversation from '@/hooks/useAutoConversation';
 
 /**
- * ConversationPanel — Giao diện chế độ "Giao tiếp" (Push-to-Talk)
+ * ConversationPanel — Giao diện chế độ "Giao tiếp" (Toggle Mic)
  *
- * MỘT nút PTT trung tâm duy nhất. Whisper tự động nhận diện ngôn ngữ.
- * Nhấn giữ để thu âm, buông tay để gửi.
+ * Click mic để BẮT ĐẦU phiên hội thoại → Nói → Tự động nhận diện khi ngừng nói
+ * → Dịch → Phát âm (TTS) → Tắt mic tạm thời khi TTS → Bật lại mic
+ * Click mic LẦN NỮA để KẾT THÚC phiên.
  */
 export default function ConversationPanel({
   apiKey,
@@ -18,11 +19,13 @@ export default function ConversationPanel({
   LANGUAGES,
 }) {
   const [history, setHistory] = useState([]);
-  const [convStatus, setConvStatus] = useState('idle'); // idle | recording | processing | speaking
+  const [convStatus, setConvStatus] = useState('idle');
+  // idle | listening | processing | speaking
   const [isSpeaking, setIsSpeaking] = useState(false);
   const logBodyRef = useRef(null);
+  const autoConvRef = useRef(null);
 
-  // ====== Callbacks cho hook ======
+  // ====== Callbacks cho hook useAutoConversation ======
   const handleTranscribed = useCallback(({ originalText, detectedLang, fromLang, toLang, id }) => {
     setConvStatus('processing');
     setHistory(prev => [{
@@ -44,52 +47,67 @@ export default function ConversationPanel({
       item.id === id ? { ...item, target: translatedText } : item
     ));
 
-    // [FIX] Phát TTS tự động + vô hiệu hóa nút mic trong khi đang đọc
+    // Tạm dừng mic → phát TTS → bật lại mic
     const toSttCode = findSttCode(toLang);
     setIsSpeaking(true);
     setConvStatus('speaking');
+
+    // Pause mic trước khi phát TTS để tránh thu tiếng vọng
+    if (autoConvRef.current) autoConvRef.current.pause();
+
     try {
       await speak(translatedText, toSttCode);
     } finally {
       setIsSpeaking(false);
-      setConvStatus('idle');
+      // Resume mic sau khi TTS xong (nếu phiên vẫn đang active)
+      if (autoConvRef.current) autoConvRef.current.resume();
+      setConvStatus('listening');
     }
   }, [speak, findSttCode]);
+
+  const handleTranslating = useCallback((isTranslating) => {
+    if (isTranslating) setConvStatus('processing');
+  }, []);
 
   const handleError = useCallback((msg) => {
     setConvStatus('idle');
     setIsSpeaking(false);
-    console.warn('PTT Error:', msg);
+    console.warn('Conversation Error:', msg);
   }, []);
 
-  // ====== Hook Push-to-Talk ======
-  const ptt = useManualConversation({
+  // ====== Hook Auto Conversation (VAD-based) ======
+  const autoConv = useAutoConversation({
     apiKey,
     engine,
+    srcLangCode: srcLang.translateCode,
+    tgtLangCode: tgtLang.translateCode,
     onTranscribed: handleTranscribed,
     onResult: handleResult,
+    onTranslating: handleTranslating,
     onError: handleError,
   });
 
-  // ====== NÚT PTT DUY NHẤT — Whisper tự nhận diện ngôn ngữ ======
-  const handlePressStart = useCallback(() => {
-    if (ptt.isRecording || ptt.isProcessing || isSpeaking) return;
+  // Lưu ref để pause/resume bên callbacks
+  autoConvRef.current = autoConv;
 
-    // Truyền srcLang làm hint, nhưng Whisper sẽ tự phát hiện ngôn ngữ thật
-    // và hook sẽ tự xác định chiều dịch (fromLang → toLang)
-    setConvStatus('recording');
-    ptt.startRecording(srcLang.translateCode, tgtLang.translateCode);
-  }, [ptt, srcLang, tgtLang]);
+  // ====== Toggle mic: Click 1 lần bật, click lần nữa tắt ======
+  const handleToggleMic = useCallback(() => {
+    if (isSpeaking) return; // Không cho thao tác khi đang phát TTS
 
-  const handlePressEnd = useCallback(() => {
-    if (!ptt.isRecording) return;
-    ptt.stopRecording();
-  }, [ptt]);
+    if (autoConv.isListening) {
+      // DỪNG phiên hội thoại
+      autoConv.stop();
+      setConvStatus('idle');
+    } else {
+      // BẮT ĐẦU phiên hội thoại
+      autoConv.start();
+      setConvStatus('listening');
+    }
+  }, [autoConv, isSpeaking]);
 
   const handleClearHistory = useCallback(() => {
     setHistory([]);
-    ptt.clearHistory();
-  }, [ptt]);
+  }, []);
 
   // ====== Helpers ======
   const formatTime = (s) => {
@@ -105,39 +123,33 @@ export default function ConversationPanel({
 
   return (
     <div className="conv-auto">
-      {/* ===== NÚT PTT TRUNG TÂM ===== */}
+      {/* ===== NÚT MIC TRUNG TÂM (TOGGLE) ===== */}
       <div className="ptt-controls">
         <div className="ptt-group">
           <button
-            className={`ptt-btn ${ptt.isRecording ? 'recording' : ''} ${ptt.isProcessing ? 'processing' : ''}`}
-            disabled={ptt.isProcessing || isSpeaking}
-            /* === Desktop events === */
-            onMouseDown={(e) => { e.preventDefault(); handlePressStart(); }}
-            onMouseUp={handlePressEnd}
-            onMouseLeave={handlePressEnd}
-            /* === Mobile events === */
-            onTouchStart={(e) => { e.preventDefault(); handlePressStart(); }}
-            onTouchEnd={handlePressEnd}
-            onTouchCancel={handlePressEnd}
+            className={`ptt-btn ${autoConv.isListening ? 'recording' : ''} ${convStatus === 'processing' ? 'processing' : ''}`}
+            disabled={isSpeaking}
+            onClick={handleToggleMic}
             onContextMenu={(e) => e.preventDefault()}
           >
             <span className="ptt-btn-icon">
-              {isSpeaking ? '🔊' : ptt.isProcessing ? '⏳' : ptt.isRecording ? '⏹' : '🎤'}
+              {isSpeaking ? '🔊' : convStatus === 'processing' ? '⏳' : autoConv.isListening ? '⏹' : '🎤'}
             </span>
-            {ptt.isRecording && <span className="pulse-ring" />}
-            {ptt.isRecording && <span className="pulse-ring p2" />}
+            {autoConv.isListening && !isSpeaking && convStatus !== 'processing' && <span className="pulse-ring" />}
+            {autoConv.isListening && !isSpeaking && convStatus !== 'processing' && <span className="pulse-ring p2" />}
           </button>
 
-          {/* Trạng thái + Timer */}
+          {/* Trạng thái */}
           <div className="ptt-hint" style={{ paddingTop: 0 }}>
-            {convStatus === 'idle' && '👆 Nhấn giữ để nói'}
-            {convStatus === 'recording' && '🔴 Đang thu âm...'}
+            {convStatus === 'idle' && '👆 Nhấn để bắt đầu hội thoại'}
+            {convStatus === 'listening' && '🟢 Đang lắng nghe...'}
             {convStatus === 'processing' && '⏳ Đang xử lý...'}
             {convStatus === 'speaking' && '🔊 Đang phát âm...'}
           </div>
 
-          {ptt.isRecording && (
-            <div className="ptt-timer">{formatTime(ptt.elapsed)}</div>
+          {/* Timer */}
+          {autoConv.isListening && (
+            <div className="ptt-timer">{formatTime(autoConv.elapsed)}</div>
           )}
 
           <div className="ptt-auto-detect-label">
@@ -158,7 +170,7 @@ export default function ConversationPanel({
           {history.length === 0 && (
             <div className="conv-empty">
               <div className="conv-empty-icon">💬</div>
-              <div>Nhấn giữ nút micro để bắt đầu</div>
+              <div>Nhấn nút micro để bắt đầu</div>
               <div className="conv-empty-sub">
                 Nói {srcLang.flag} {srcLang.name} hoặc {tgtLang.flag} {tgtLang.name} — Tự động nhận diện!
               </div>
