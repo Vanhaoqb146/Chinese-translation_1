@@ -25,12 +25,15 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
   const onResultRef = useRef(onResult);
   const onInterimRef = useRef(onInterim);
   const onErrorRef = useRef(onError);
+  const autoStopTimerRef = useRef(null); // Timer ép dừng sau 1s im lặng
+
   useEffect(() => { onResultRef.current = onResult; }, [onResult]);
   useEffect(() => { onInterimRef.current = onInterim; }, [onInterim]);
   useEffect(() => { onErrorRef.current = onError; }, [onError]);
 
   const cleanup = useCallback(() => {
     clearInterval(timerRef.current);
+    clearTimeout(autoStopTimerRef.current);
     isActiveRef.current = false;
     setIsRecording(false);
   }, []);
@@ -42,11 +45,11 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
 
     // Dừng phiên cũ nếu có
     if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch (_) {}
+      try { recognitionRef.current.abort(); } catch (_) { }
     }
 
     const rec = new SR();
-    rec.continuous = false;      // [KEY] Tự dừng khi user ngừng nói
+    rec.continuous = false;      // Tự dừng khi user ngừng nói
     rec.interimResults = true;   // Hiển thị real-time
     rec.lang = lang;
     rec.maxAlternatives = 1;
@@ -56,6 +59,8 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
     };
 
     rec.onresult = (event) => {
+      clearTimeout(autoStopTimerRef.current); // Xóa timer cũ khi có giọng nói mới
+
       let finalText = '';
       let interimText = '';
 
@@ -75,6 +80,14 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
       } else if (interimText.trim()) {
         // Chỉ có interim → hiển thị tạm
         if (onInterimRef.current) onInterimRef.current(interimText.trim());
+
+        // [AUTO STOP THÔNG MINH]: Ép dừng nhận diện sau 1 giây im lặng 
+        // để trình duyệt trả về isFinal ngay lập tức thay vì đợi 2-3s mặc định
+        autoStopTimerRef.current = setTimeout(() => {
+          if (recognitionRef.current) {
+            try { recognitionRef.current.stop(); } catch (e) { }
+          }
+        }, 1000);
       }
     };
 
@@ -108,14 +121,14 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
 
   const stop = useCallback(() => {
     if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch (_) {}
+      try { recognitionRef.current.stop(); } catch (_) { }
     }
     cleanup();
   }, [cleanup]);
 
   const abort = useCallback(() => {
     if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch (_) {}
+      try { recognitionRef.current.abort(); } catch (_) { }
     }
     cleanup();
     if (onInterimRef.current) onInterimRef.current('');
@@ -124,7 +137,7 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
   useEffect(() => {
     return () => {
       if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch (_) {}
+        try { recognitionRef.current.abort(); } catch (_) { }
       }
       clearInterval(timerRef.current);
     };

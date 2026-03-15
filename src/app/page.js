@@ -152,7 +152,6 @@ export default function HomePage() {
     if (!cleanText || noiseWords.includes(lowerText)) return;
 
     // [KEY] Auto-stop mic khi có kết quả cuối cùng
-    // (continuous=false nên recognition đã tự dừng, sync UI state)
     setActiveMic(null);
     setInterimText('');
 
@@ -161,6 +160,11 @@ export default function HomePage() {
       queueTranslation(cleanText, LANGUAGES[srcIdx].translateCode, LANGUAGES[tgtIdx].translateCode, { apiKey, engine },
         async (origText, translated) => {
           setTargetBlocks(prev => [...prev, { text: translated, type: 'final', id: Date.now() }]);
+          // Lưu lịch sử dịch
+          setHistory(prev => [{
+            source: origText, target: translated, id: Date.now(),
+            time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          }, ...prev].slice(0, 50));
           await speak(translated, LANGUAGES[tgtIdx].ttsCode);
         });
     } else {
@@ -168,6 +172,11 @@ export default function HomePage() {
       queueTranslation(cleanText, LANGUAGES[tgtIdx].translateCode, LANGUAGES[srcIdx].translateCode, { apiKey, engine },
         async (origText, translated) => {
           setSourceBlocks(prev => [...prev, { text: translated, type: 'final', id: Date.now() }]);
+          // Lưu lịch sử dịch
+          setHistory(prev => [{
+            source: origText, target: translated, id: Date.now(),
+            time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          }, ...prev].slice(0, 50));
           await speak(translated, LANGUAGES[srcIdx].ttsCode);
         });
     }

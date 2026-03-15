@@ -71,7 +71,9 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
       const formData = new FormData();
       formData.append('audio', audioBlob, 'audio.wav');
       formData.append('apiKey', apiKey);
-      // Gửi language hints để Whisper ưu tiên nhận diện đúng ngôn ngữ
+      // [FIX] Conversation mode: KHÔNG ép ngôn ngữ — để Whisper tự phát hiện
+      // vì trong hội thoại cả 2 bên đều có thể nói ngôn ngữ khác nhau
+      formData.append('mode', 'conversation');
       formData.append('srcLang', srcLangCode);
       formData.append('tgtLang', tgtLangCode);
 
