@@ -236,12 +236,10 @@ export default function HomePage() {
   const toggleMic = (panel) => {
     if (viewMode === 'conversation') return;
     if (activeMic === panel) {
+      // [FIX BUG 1] stop() bây giờ sẽ tự flush session buffer qua onResult
+      // → handleFinalResult sẽ tự được gọi 1 lần duy nhất với toàn bộ câu
+      // → Không cần gọi flush() thủ công nữa (tránh dịch 2 lần)
       if (sttSourceRef.current) sttSourceRef.current.stop();
-      flush(LANGUAGES[srcIdx].translateCode, LANGUAGES[tgtIdx].translateCode, { apiKey, engine },
-        (o, t) => {
-          setTargetBlocks(prev => [...prev, { text: t, type: 'final', id: Date.now() }]);
-          speak(t, LANGUAGES[tgtIdx].ttsCode);
-        });
       setActiveMic(null); setInterimText('');
     } else {
       if (activeMic && sttSourceRef.current) sttSourceRef.current.stop();

@@ -25,31 +25,43 @@ export async function POST(request) {
       };
       const cfg = configs[engine] || configs.openai;
 
-      // 1. TỐI ƯU HÓA SYSTEM PROMPT
-      const systemPrompt = `Bạn là một chuyên gia phiên dịch cabin (interpreter) cấp cao.
-Nhiệm vụ: Dịch văn bản từ ${sourceName} sang ${targetName}.
-Yêu cầu bắt buộc:
-1. CHỈ TRẢ VỀ nội dung đã dịch, TUYỆT ĐỐI KHÔNG thêm lời giải thích, không thêm ngoặc kép, không dùng markdown.
-2. Dịch sát nghĩa, tự nhiên, trôi chảy và phù hợp với văn phong bản địa của ngôn ngữ đích.
-3. TỰ ĐỘNG LƯỢC BỎ các từ ngữ ngập ngừng (à, ừm, ờ, vấp váp). TUYỆT ĐỐI GIỮ NGUYÊN TÊN RIÊNG (ví dụ: Nguyễn Văn A, Trần Văn B), không được nhầm lẫn chữ cái cuối câu chỉ tên người với thán từ/từ đệm.
-4. Chú ý đọc hiểu lịch sử hội thoại (nếu có) để xác định đúng đại từ nhân xưng và ngữ cảnh.`;
+      // [FIX BUG 2] STRICT TRANSLATION-ONLY SYSTEM PROMPT
+      // Sử dụng tiếng Anh, cực kỳ rõ ràng, cấm GPT trả lời câu hỏi hoặc nói chuyện
+      const systemPrompt = `You are a professional, direct translation engine. Your ONLY task is to translate text from ${sourceName} to ${targetName}.
+
+ABSOLUTE RULES — NEVER BREAK THESE:
+1. ONLY output the translated text. Nothing else.
+2. NEVER answer questions. If the input is a question, TRANSLATE the question. Do NOT answer it.
+3. NEVER continue a conversation. NEVER add greetings, farewells, or conversational filler.
+4. NEVER add explanations, notes, quotation marks, or markdown formatting.
+5. NEVER refuse to translate. Translate everything exactly as given.
+6. Translate naturally and fluently in the target language's native style.
+7. Automatically remove filler words (um, uh, er, à, ừm, ờ) from the input.
+8. ALWAYS preserve proper nouns exactly as they appear (e.g., names of people, places).
+9. Use conversation history ONLY for pronoun/context resolution, NEVER to generate responses.
+
+REMEMBER: You are a TRANSLATION ENGINE, not a chatbot. Your output must ALWAYS be a translation, NEVER an answer or response.`;
 
       // 2. XÂY DỰNG MẢNG TIN NHẮN CÓ NGỮ CẢNH
       const messages = [
         { role: 'system', content: systemPrompt }
       ];
 
-      // Đưa khoảng 4 câu lịch sử gần nhất vào để làm ngữ cảnh (tránh gửi quá dài tốn token)
+      // Đưa khoảng 4 câu lịch sử gần nhất, wrap trong khung dịch thuật rõ ràng
+      // để GPT không nhầm history là cuộc hội thoại cần tiếp tục
       if (history && history.length > 0) {
         const recentHistory = history.slice(-4);
         recentHistory.forEach(msg => {
-          // Format mảng history mong đợi từ FE: { role: 'user'/'assistant', content: '...' }
-          messages.push({ role: msg.role || 'user', content: msg.content });
+          const role = msg.role || 'user';
+          const prefix = role === 'user'
+            ? `[Previous ${sourceName} input]:`
+            : `[Previous ${targetName} translation]:`;
+          messages.push({ role, content: `${prefix} ${msg.content}` });
         });
       }
 
-      // Thêm câu nói hiện tại cần dịch vào cuối
-      messages.push({ role: 'user', content: text });
+      // Thêm câu nói hiện tại cần dịch vào cuối, wrap rõ ràng
+      messages.push({ role: 'user', content: `Translate the following from ${sourceName} to ${targetName}. Output ONLY the translation:\n${text}` });
 
       try {
         const res = await fetch(cfg.url, {

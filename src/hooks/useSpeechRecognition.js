@@ -15,6 +15,10 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
   const keepAliveRef = useRef(null);
   const restartCount = useRef(0);
 
+  // [FIX BUG 1] Session buffer — tích lũy tất cả isFinal fragments trong 1 phiên ghi âm
+  // Chỉ gọi onResult 1 lần duy nhất khi user nhấn "Dừng"
+  const sessionBufferRef = useRef('');
+
   const createRecognition = useCallback(() => {
     if (typeof window === 'undefined') return null;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -33,20 +37,21 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
 
     rec.onresult = (event) => {
       lastResultTime.current = Date.now();
-      let finalText = '';
-      let interimText = '';
+      let currentInterim = '';
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript.trim();
         if (event.results[i].isFinal) {
-          finalText += transcript + ' ';
+          // [FIX] Tích lũy vào session buffer thay vì gọi onResult ngay
+          sessionBufferRef.current += transcript + ' ';
         } else {
-          interimText += transcript + ' ';
+          currentInterim += transcript + ' ';
         }
       }
 
-      if (finalText && onResult) onResult(finalText);
-      if (interimText && onInterim) onInterim(interimText);
+      // Hiển thị trên UI: session buffer đã tích lũy + đoạn interim đang gõ
+      const displayText = (sessionBufferRef.current + currentInterim).trim();
+      if (displayText && onInterim) onInterim(displayText);
     };
 
     rec.onerror = (event) => {
@@ -78,13 +83,14 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
     };
 
     return rec;
-  }, [lang, onResult, onInterim]);
+  }, [lang, onInterim, onError]);
 
   const start = useCallback(() => {
     wantRecording.current = true;
     restartCount.current = 0;
     startTime.current = Date.now();
     lastResultTime.current = Date.now();
+    sessionBufferRef.current = ''; // Reset buffer mỗi phiên mới
     setElapsed(0);
 
     // Start timer
@@ -112,7 +118,14 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
     clearInterval(keepAliveRef.current);
     try { if (recognitionRef.current) recognitionRef.current.stop(); } catch (_) {}
     setIsRecording(false);
-  }, []);
+
+    // [FIX BUG 1] Flush toàn bộ session buffer thông qua onResult khi dừng mic
+    const finalText = sessionBufferRef.current.trim();
+    sessionBufferRef.current = '';
+    if (finalText && onResult) {
+      onResult(finalText);
+    }
+  }, [onResult]);
 
   const abort = useCallback(() => {
     wantRecording.current = false;
@@ -120,6 +133,7 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
     clearInterval(keepAliveRef.current);
     try { if (recognitionRef.current) recognitionRef.current.abort(); } catch (_) {}
     setIsRecording(false);
+    sessionBufferRef.current = ''; // Xóa buffer khi abort, không dịch
   }, []);
 
   useEffect(() => {
