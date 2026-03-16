@@ -2,7 +2,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 const SILENCE_THRESHOLD = 0.01; // Hạ xuống 0.01 dư sức bắt trọn vẹn phụ âm mềm của Tiếng Việt
-const SILENCE_DURATION = 1100; // [BALANCED] 1100ms — cân bằng giữa tốc độ và độ ổn định
+const SILENCE_DURATION = 2000; // [BALANCED] 2s — đủ dài để gom trọn câu khi video/bài phát biểu có quãng nghỉ
 const MIN_RECORD_DURATION = 600; // Hạ xuống 0.6s để bắt được các câu ngắn hơn
 const MAX_RECORD_DURATION = 10000;
 const PRE_ROLL_MS = 800; // [FIX] Tăng bộ đệm lên 0.8s để không bị mất đầu câu
@@ -163,8 +163,8 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
     try {
       conversationHistoryRef.current = [];
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { 
-          echoCancellation: true, 
+        audio: {
+          echoCancellation: true,
           noiseSuppression: false, // [TẮT] Chống ồn mặc định của Chrome làm nghẹt/mất phụ âm Tiếng Việt
           autoGainControl: false   // [TẮT] Tự động tăng giảm âm lượng gây biến dạng sóng âm PCM
         }
