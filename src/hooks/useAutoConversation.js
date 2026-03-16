@@ -1,10 +1,11 @@
 'use client';
 import { useState, useRef, useCallback, useEffect } from 'react';
 
-const SILENCE_THRESHOLD = 0.01; // Hạ xuống 0.01 dư sức bắt trọn vẹn phụ âm mềm của Tiếng Việt
-const SILENCE_DURATION = 2000; // [BALANCED] 2s — đủ dài để gom trọn câu khi video/bài phát biểu có quãng nghỉ
-const MIN_RECORD_DURATION = 600; // Hạ xuống 0.6s để bắt được các câu ngắn hơn
-const MAX_RECORD_DURATION = 10000;
+const SILENCE_THRESHOLD = 0.003; // [TUNED] Ngưỡng cho EMA-smoothed RMS (không phải raw)
+const SILENCE_DURATION = 4500; // 5s — tự động dịch sau 5s ngừng nói
+const MIN_RECORD_DURATION = 600; // Chunk quá ngắn → bỏ qua (không gửi API)
+const MIN_CHUNK_MS = 5000; // Chunk phải ghi >= 5s trước khi cho phép cắt
+const MAX_RECORD_DURATION = 100000; // 1p40s — giới hạn an toàn cho Whisper
 const PRE_ROLL_MS = 800; // [FIX] Tăng bộ đệm lên 0.8s để không bị mất đầu câu
 
 const WHISPER_LANG_MAP = { chinese: 'zh', mandarin: 'zh', vietnamese: 'vi', english: 'en', japanese: 'ja', korean: 'ko' };
@@ -54,30 +55,34 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
   const recordStartTimeRef = useRef(0);
   const wantListeningRef = useRef(false);
   const isPausedRef = useRef(false);
-  const isProcessingRef = useRef(false);
+  const processingCountRef = useRef(0); // [REFACTOR] Counter thay cho boolean — cho phép xử lý song song
 
   // Kho chứa sóng âm thô
   const preRollBufferRef = useRef([]);
   const recordingBufferRef = useRef([]);
   const sampleRateRef = useRef(44100);
   const conversationHistoryRef = useRef([]);
+  const smoothedRmsRef = useRef(0); // [EMA] San mượt tín hiệu tránh nhiễu frame-by-frame
+  const processAudioChunkRef = useRef(null); // [REF] Giữ reference ổn định cho stop()
 
   const processAudioChunk = useCallback(async (audioBlob) => {
-    isProcessingRef.current = true;
+    processingCountRef.current += 1;
     if (onTranslating) onTranslating(true);
-    console.log('⏳ Gửi file WAV Studio (đã ghép 0.5s) lên Whisper...');
+    console.log(`⏳ Gửi file WAV lên Whisper... (queue: ${processingCountRef.current})`);
 
     try {
       const formData = new FormData();
       formData.append('audio', audioBlob, 'audio.wav');
       formData.append('apiKey', apiKey);
-      // [FIX] Conversation mode: KHÔNG ép ngôn ngữ — để Whisper tự phát hiện
-      // vì trong hội thoại cả 2 bên đều có thể nói ngôn ngữ khác nhau
       formData.append('mode', 'conversation');
       formData.append('srcLang', srcLangCode);
       formData.append('tgtLang', tgtLangCode);
 
-      const whisperRes = await fetch('/api/whisper', { method: 'POST', body: formData });
+      const whisperRes = await fetch('/api/whisper', {
+        method: 'POST',
+        body: formData,
+        signal: AbortSignal.timeout(90000), // 90s timeout — file lớn cần thời gian upload + xử lý
+      });
       const whisperData = await whisperRes.json();
       console.log("✅ Whisper trả về:", whisperData);
 
@@ -90,8 +95,6 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
 
       if (onLangDetected) onLangDetected(langCode);
 
-      // [FIX] Generic language routing — không hardcode Vietnamese
-      // Nếu Whisper phát hiện đúng ngôn ngữ nguồn → dịch sang đích, và ngược lại
       let fromLang, toLang;
       if (langCode === srcLangCode) {
         fromLang = srcLangCode;
@@ -100,7 +103,6 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
         fromLang = tgtLangCode;
         toLang = srcLangCode;
       } else {
-        // Whisper trả về ngôn ngữ không khớp → fallback: dùng srcLang
         fromLang = srcLangCode;
         toLang = tgtLangCode;
       }
@@ -124,10 +126,13 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
     } catch (err) {
       if (onError) onError('Lỗi: ' + err.message);
     } finally {
-      isProcessingRef.current = false;
-      if (onTranslating) onTranslating(false);
+      processingCountRef.current = Math.max(0, processingCountRef.current - 1);
+      if (processingCountRef.current === 0 && onTranslating) onTranslating(false);
     }
   }, [apiKey, engine, srcLangCode, tgtLangCode, onTranscribed, onResult, onTranslating, onError, onLangDetected]);
+
+  // Cập nhật ref mỗi khi processAudioChunk thay đổi
+  processAudioChunkRef.current = processAudioChunk;
 
   const stopRecordingChunk = useCallback(() => {
     clearTimeout(maxTimerRef.current);
@@ -196,28 +201,53 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
         const inputData = e.inputBuffer.getChannelData(0);
         const pcm = new Float32Array(inputData);
 
-        // 1. Máy quét cường độ âm thanh (VAD) tích hợp siêu tốc
+        // 1. Máy quét cường độ âm thanh (VAD) với EMA smoothing
         let sum = 0;
         for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
-        const rms = Math.sqrt(sum / pcm.length);
+        const rawRms = Math.sqrt(sum / pcm.length);
 
-        // [FIX] Khi đang xử lý API → vẫn thu pre-roll, chỉ không bắt đầu recording mới
-        // Trước đây isProcessingRef chặn TOÀN BỘ audio → mất trọn câu tiếp theo
-        if (rms > SILENCE_THRESHOLD && !isProcessingRef.current) {
+        // [EMA] Asymmetric Attack/Release — kỹ thuật audio chuẩn (compressor/gate)
+        // Attack  α=0.4: raw=0.004 → smooth tăng 0.001→0.002→0.003 trong 2-3 frame
+        // Release α=0.05: smooth giảm rất chậm → giữ qua quãng nghỉ thở
+        const alpha = rawRms > smoothedRmsRef.current ? 0.4 : 0.05;
+        smoothedRmsRef.current = alpha * rawRms + (1 - alpha) * smoothedRmsRef.current;
+        const rms = smoothedRmsRef.current;
+
+        // [DEBUG] Log mỗi 2 giây
+        if (!window._lastRmsLog || Date.now() - window._lastRmsLog > 2000) {
+          console.log(`🎤 raw=${rawRms.toFixed(4)} smooth=${rms.toFixed(4)} | threshold=${SILENCE_THRESHOLD} | recording=${isRecordingChunkRef.current} | queue=${processingCountRef.current}`);
+          window._lastRmsLog = Date.now();
+        }
+
+        // [REFACTOR] VAD chạy ĐỘC LẬP — dùng smoothed RMS
+        if (rms > SILENCE_THRESHOLD) {
           clearTimeout(silenceTimerRef.current);
           if (!isRecordingChunkRef.current) startRecordingChunk();
 
           silenceTimerRef.current = setTimeout(() => {
-            if (isRecordingChunkRef.current) stopRecordingChunk();
+            if (!isRecordingChunkRef.current) return;
+
+            // [GUARD] Bảo vệ thời gian tối thiểu — không cắt fragment quá ngắn
+            const elapsed = Date.now() - recordStartTimeRef.current;
+            if (elapsed < MIN_CHUNK_MS) {
+              console.log(`⏳ Chunk mới ${elapsed}ms < ${MIN_CHUNK_MS}ms — chờ thêm...`);
+              // Đặt lại timer cho thời gian còn thiếu
+              silenceTimerRef.current = setTimeout(() => {
+                console.log(`⏱️ Min-chunk guard timer fired — stopping recording chunk`);
+                if (isRecordingChunkRef.current) stopRecordingChunk();
+              }, MIN_CHUNK_MS - elapsed);
+              return;
+            }
+
+            console.log(`⏱️ Silence timer fired after ${SILENCE_DURATION}ms (chunk ${elapsed}ms) — stopping`);
+            stopRecordingChunk();
           }, SILENCE_DURATION);
         }
 
         // 2. Chuyển hàng vào kho đệm hoặc kho chính
-        if (isRecordingChunkRef.current && !isProcessingRef.current) {
+        if (isRecordingChunkRef.current) {
           recordingBufferRef.current.push(pcm);
         } else {
-          // [FIX] Tiếp tục thu pre-roll ngay cả khi đang xử lý API
-          // → Khi API xong, câu tiếp theo đã có sẵn 800ms đệm đầu
           preRollBufferRef.current.push(pcm);
           let totalSamples = preRollBufferRef.current.reduce((acc, val) => acc + val.length, 0);
           while (totalSamples > PRE_ROLL_SAMPLES && preRollBufferRef.current.length > 1) {
@@ -229,7 +259,7 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
 
       wantListeningRef.current = true;
       isPausedRef.current = false;
-      isProcessingRef.current = false;
+      processingCountRef.current = 0;
       setIsListening(true);
       setElapsed(0);
       startTimeRef.current = Date.now();
@@ -242,14 +272,28 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
 
   const stop = useCallback(() => {
     wantListeningRef.current = false;
-    setIsListening(false);
     clearInterval(elapsedTimerRef.current);
     clearTimeout(silenceTimerRef.current);
     clearTimeout(maxTimerRef.current);
+
+    // [FIX] Xử lý chunk đang ghi trước khi dọn dẹp — dùng ref thay vì dependency
+    if (isRecordingChunkRef.current) {
+      isRecordingChunkRef.current = false;
+      console.log('🛑 Cắt câu nói! (stop)');
+      const duration = Date.now() - recordStartTimeRef.current;
+      if (duration >= MIN_RECORD_DURATION && recordingBufferRef.current.length > 0) {
+        const blob = exportWAV(preRollBufferRef.current, recordingBufferRef.current, sampleRateRef.current);
+        if (processAudioChunkRef.current) processAudioChunkRef.current(blob);
+      }
+      recordingBufferRef.current = [];
+      preRollBufferRef.current = [];
+    }
+
+    setIsListening(false);
     if (processorRef.current) processorRef.current.disconnect();
     if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') audioContextRef.current.close();
-  }, []);
+  }, []); // [] — không dependency → stable → useEffect cleanup không fire giữa chừng
 
   const pause = useCallback(() => {
     isPausedRef.current = true;

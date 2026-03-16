@@ -43,28 +43,47 @@ export default function ConversationPanel({
     }, 50);
   }, []);
 
-  const handleResult = useCallback(async ({ translatedText, toLang, id }) => {
-    setHistory(prev => prev.map(item =>
-      item.id === id ? { ...item, target: translatedText } : item
-    ));
+  // ====== TTS Queue — phát lần lượt, chunk 2 chờ chunk 1 xong ======
+  const ttsQueueRef = useRef([]);
+  const isPlayingRef = useRef(false);
 
-    // Tạm dừng mic → phát TTS → bật lại mic
+  const processTtsQueue = useCallback(async () => {
+    if (isPlayingRef.current) return; // Đang phát → không xen vào
+    if (ttsQueueRef.current.length === 0) return;
+
+    isPlayingRef.current = true;
+    const { translatedText, toLang } = ttsQueueRef.current.shift();
     const toSttCode = findSttCode(toLang);
+
     setIsSpeaking(true);
     setConvStatus('speaking');
-
-    // Pause mic trước khi phát TTS để tránh thu tiếng vọng
     if (autoConvRef.current) autoConvRef.current.pause();
 
     try {
       await speak(translatedText, toSttCode);
     } finally {
       setIsSpeaking(false);
-      // Resume mic sau khi TTS xong (nếu phiên vẫn đang active)
       if (autoConvRef.current) autoConvRef.current.resume();
-      setConvStatus('listening');
+      isPlayingRef.current = false;
+
+      // Còn job trong queue → phát tiếp
+      if (ttsQueueRef.current.length > 0) {
+        processTtsQueue();
+      } else {
+        setConvStatus('listening');
+      }
     }
   }, [speak, findSttCode]);
+
+  const handleResult = useCallback(async ({ translatedText, toLang, id }) => {
+    setHistory(prev => prev.map(item =>
+      item.id === id ? { ...item, target: translatedText } : item
+    ));
+
+    // Thêm vào queue TTS thay vì phát ngay
+    ttsQueueRef.current.push({ translatedText, toLang });
+    processTtsQueue();
+  }, [processTtsQueue]);
 
   const handleTranslating = useCallback((isTranslating) => {
     if (isTranslating) {
@@ -161,6 +180,10 @@ export default function ConversationPanel({
 
           <div className="ptt-auto-detect-label">
             Tự động nhận diện {srcLang.flag} {srcLang.name} hoặc {tgtLang.flag} {tgtLang.name}
+          </div>
+          <div style={{ fontSize: '0.75rem', color: '#ff4d4f', marginTop: 8, textAlign: 'center', lineHeight: 1.5, fontWeight: 600, background: 'rgba(255,77,79,0.1)', borderRadius: 8, padding: '6px 12px', border: '1px solid rgba(255,77,79,0.25)' }}>
+            ⚠️ Nói không quá 1p30s/lượt để đảm bảo chất lượng dịch· Nếu quá 1p30s sẽ tự động ngắt.
+            🌐Tự động dịch sau 4s ngừng nói
           </div>
         </div>
       </div>

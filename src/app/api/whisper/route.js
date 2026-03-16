@@ -13,13 +13,21 @@ const BAD_PHRASES = [
   'please like', 'don\'t forget to subscribe', 'hit the bell',
   'leave a comment', 'share this video', 'follow me',
   'welcome back', 'hello everyone', 'hey guys',
-  'đăng ký', 'theo dõi', 'tạm biệt', 'hẹn gặp lại',
+  // Vietnamese hallucination
+  'đăng ký', 'đăng kí', 'theo dõi', 'tạm biệt', 'hẹn gặp lại',
   'cảm ơn các bạn', 'chào mừng các bạn', 'video tiếp theo',
   'nhấn like', 'chia sẻ', 'bình luận',
-  'chào mừng bạn',
+  'chào mừng bạn', 'kênh lalaschool', 'lalaschool',
+  'không bỏ lỡ', 'video hấp dẫn', 'đăng kí cho kênh',
+  // Simplified Chinese hallucination
   '点赞', '订阅', '转发', '打赏', '明镜', '字幕',
   '谢谢观看', '谢谢大家', '再见', '感谢收看',
-  '欢迎', '关注',
+  '欢迎', '关注', '以上就是本期视频', '本期视频的全部内容',
+  // Traditional Chinese hallucination (Whisper thường trả về phồn thể)
+  '謝謝觀看', '謝謝大家', '感謝收看', '訂閱', '點讚',
+  '歡迎', '關注', '以上就是本期視頻', '本期視頻的全部內容',
+  '字幕', '轉發',
+  // Common mixed
   'amara', 'manuval', 'प्रस्तुत्र',
   'http', 'www', '.com', '.org', '.net',
   'điểm điểm', 'minh kính', 'phẩy.', 'chấm.',
@@ -63,6 +71,7 @@ export async function POST(request) {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}` },
       body: whisperForm,
+      signal: AbortSignal.timeout(60000), // 60s timeout cho file WAV lớn (~5MB)
     });
 
     if (!res.ok) {
