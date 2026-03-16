@@ -67,7 +67,13 @@ export default function ConversationPanel({
   }, [speak, findSttCode]);
 
   const handleTranslating = useCallback((isTranslating) => {
-    if (isTranslating) setConvStatus('processing');
+    if (isTranslating) {
+      setConvStatus('processing');
+    } else {
+      // [FIX] Khi xử lý xong (kể cả Whisper trả rỗng), phải reset UI về 'listening'
+      // Nếu không có else này, UI sẽ bị treo vĩnh viễn ở "Đang xử lý..."
+      setConvStatus(prev => prev === 'processing' ? 'listening' : prev);
+    }
   }, []);
 
   const handleError = useCallback((msg) => {
