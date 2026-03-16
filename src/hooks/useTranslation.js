@@ -1,7 +1,7 @@
 'use client';
 import { useState, useCallback, useRef } from 'react';
 
-const DEBOUNCE_MS = 800;
+const DEBOUNCE_MS = 100; // [OPT] Giảm từ 800ms → 100ms vì useSpeechRecognition đã có auto-stop timer
 
 export default function useTranslation() {
   const [isTranslating, setIsTranslating] = useState(false);

@@ -115,8 +115,8 @@ export default function HomePage() {
       // Trên Chrome Mobile, queue TTS hay bị đơ sau lần phát đầu tiên
       window.speechSynthesis.cancel();
 
-      // Đợi 1 tick để cancel hoàn tất trước khi phát mới
-      setTimeout(() => {
+      // [OPT] queueMicrotask thay vì setTimeout(50) — cancel() hoàn tất đồng bộ
+      queueMicrotask(() => {
         const chunks = text.match(/[^。！？.!?\n]+[。！？.!?\n]?/g) || [text];
         const voice = findVoice(langCode);
         let i = 0;
@@ -143,7 +143,7 @@ export default function HomePage() {
           window.speechSynthesis.speak(u);
         };
         next();
-      }, 50);
+      });
     });
   };
 

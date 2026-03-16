@@ -2,7 +2,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 const SILENCE_THRESHOLD = 0.01; // Hạ xuống 0.01 dư sức bắt trọn vẹn phụ âm mềm của Tiếng Việt
-const SILENCE_DURATION = 1200; // Tăng lên 1.2s để ổn định hơn, tránh cắt giữa câu
+const SILENCE_DURATION = 1000; // [OPT] Giảm từ 1200ms → 1000ms, nhờ PRE_ROLL 800ms đệm đủ an toàn
 const MIN_RECORD_DURATION = 600; // Hạ xuống 0.6s để bắt được các câu ngắn hơn
 const MAX_RECORD_DURATION = 10000;
 const PRE_ROLL_MS = 800; // [FIX] Tăng bộ đệm lên 0.8s để không bị mất đầu câu
