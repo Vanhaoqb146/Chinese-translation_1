@@ -87,7 +87,7 @@ export default function useSpeechRecognition({ lang = 'zh-CN', onResult, onInter
           if (recognitionRef.current) {
             try { recognitionRef.current.stop(); } catch (e) { }
           }
-        }, 800); // [OPT] Giảm từ 1000ms → 800ms, phản hồi nhanh hơn
+        }, 900); // [BALANCED] 900ms — cân bằng giữa phản hồi nhanh và không cắt giữa câu
       }
     };
 

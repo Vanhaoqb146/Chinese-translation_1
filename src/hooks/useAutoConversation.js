@@ -2,7 +2,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 const SILENCE_THRESHOLD = 0.01; // Hạ xuống 0.01 dư sức bắt trọn vẹn phụ âm mềm của Tiếng Việt
-const SILENCE_DURATION = 1000; // [OPT] Giảm từ 1200ms → 1000ms, nhờ PRE_ROLL 800ms đệm đủ an toàn
+const SILENCE_DURATION = 1100; // [BALANCED] 1100ms — cân bằng giữa tốc độ và độ ổn định
 const MIN_RECORD_DURATION = 600; // Hạ xuống 0.6s để bắt được các câu ngắn hơn
 const MAX_RECORD_DURATION = 10000;
 const PRE_ROLL_MS = 800; // [FIX] Tăng bộ đệm lên 0.8s để không bị mất đầu câu
@@ -191,7 +191,7 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
       const PRE_ROLL_SAMPLES = Math.floor(sampleRateRef.current * (PRE_ROLL_MS / 1000));
 
       processor.onaudioprocess = (e) => {
-        if (!wantListeningRef.current || isPausedRef.current || isProcessingRef.current) return;
+        if (!wantListeningRef.current || isPausedRef.current) return;
 
         const inputData = e.inputBuffer.getChannelData(0);
         const pcm = new Float32Array(inputData);
@@ -201,7 +201,9 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
         for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
         const rms = Math.sqrt(sum / pcm.length);
 
-        if (rms > SILENCE_THRESHOLD) {
+        // [FIX] Khi đang xử lý API → vẫn thu pre-roll, chỉ không bắt đầu recording mới
+        // Trước đây isProcessingRef chặn TOÀN BỘ audio → mất trọn câu tiếp theo
+        if (rms > SILENCE_THRESHOLD && !isProcessingRef.current) {
           clearTimeout(silenceTimerRef.current);
           if (!isRecordingChunkRef.current) startRecordingChunk();
 
@@ -211,9 +213,11 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
         }
 
         // 2. Chuyển hàng vào kho đệm hoặc kho chính
-        if (isRecordingChunkRef.current) {
+        if (isRecordingChunkRef.current && !isProcessingRef.current) {
           recordingBufferRef.current.push(pcm);
         } else {
+          // [FIX] Tiếp tục thu pre-roll ngay cả khi đang xử lý API
+          // → Khi API xong, câu tiếp theo đã có sẵn 800ms đệm đầu
           preRollBufferRef.current.push(pcm);
           let totalSamples = preRollBufferRef.current.reduce((acc, val) => acc + val.length, 0);
           while (totalSamples > PRE_ROLL_SAMPLES && preRollBufferRef.current.length > 1) {
