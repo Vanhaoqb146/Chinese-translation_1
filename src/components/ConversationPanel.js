@@ -85,114 +85,9 @@ export default function ConversationPanel({
   const isBusy = convStatus === 'translating' || convStatus === 'speaking';
 
   return (
-    <div className="conv-auto">
-      {/* ===== 2 NÚT MIC ===== */}
-      <div className="ptt-controls">
-        {/* Nút Tiếng Việt */}
-        <div className="ptt-group">
-          <button
-            className={`ptt-btn ${conv.activeLang === srcLang.translateCode ? 'recording' : ''}`}
-            disabled={isBusy || (conv.isListening && conv.activeLang !== srcLang.translateCode)}
-            onClick={() => handleStartLang(srcLang.translateCode)}
-            onContextMenu={(e) => e.preventDefault()}
-          >
-            <span className="ptt-btn-icon">
-              {conv.activeLang === srcLang.translateCode && convStatus === 'speaking' ? '🔊' :
-               conv.activeLang === srcLang.translateCode && convStatus === 'translating' ? '⏳' :
-               conv.activeLang === srcLang.translateCode ? '⏹' : '🎤'}
-            </span>
-            {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
-            {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
-          </button>
-          <div className="ptt-label">{srcLang.flag} {srcLang.name}</div>
-        </div>
-
-        {/* Trạng thái ở giữa */}
-        <div className="ptt-hint">
-          {convStatus === 'idle' && '👆 Chọn ngôn ngữ'}
-          {convStatus === 'listening' && '🟢 Đang nghe...'}
-          {convStatus === 'translating' && '⏳ Đang dịch...'}
-          {convStatus === 'speaking' && '🔊 Đang phát...'}
-        </div>
-
-        {/* Nút 中文 */}
-        <div className="ptt-group">
-          <button
-            className={`ptt-btn ${conv.activeLang === tgtLang.translateCode ? 'recording' : ''}`}
-            disabled={isBusy || (conv.isListening && conv.activeLang !== tgtLang.translateCode)}
-            onClick={() => handleStartLang(tgtLang.translateCode)}
-            onContextMenu={(e) => e.preventDefault()}
-          >
-            <span className="ptt-btn-icon">
-              {conv.activeLang === tgtLang.translateCode && convStatus === 'speaking' ? '🔊' :
-               conv.activeLang === tgtLang.translateCode && convStatus === 'translating' ? '⏳' :
-               conv.activeLang === tgtLang.translateCode ? '⏹' : '🎤'}
-            </span>
-            {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
-            {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
-          </button>
-          <div className="ptt-label">{tgtLang.flag} {tgtLang.name}</div>
-        </div>
-      </div>
-
-      {/* Timer + Info */}
-      {conv.isListening && (
-        <div style={{ textAlign: 'center', marginTop: '-8px', marginBottom: '8px' }}>
-          <div className="ptt-timer">{formatTime(conv.elapsed)}</div>
-        </div>
-      )}
-
-      <div style={{ fontSize: '0.72rem', color: '#ff4d4f', textAlign: 'center', lineHeight: 1.6, fontWeight: 600, background: 'rgba(255,77,79,0.08)', borderRadius: 8, padding: '6px 12px', border: '1px solid rgba(255,77,79,0.2)', margin: '0 16px 12px' }}>
-        ⚠️ Không nên thu âm quá 3 phút để dịch chính xác nhất!
-      </div>
-
-      {/* ===== CÀI ĐẶT THỜI GIAN IM LẶNG ===== */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 10,
-        margin: '0 16px 12px', padding: '8px 14px',
-        background: 'rgba(14, 165, 233, 0.05)',
-        borderRadius: 10, border: '1px solid rgba(14, 165, 233, 0.15)',
-      }}>
-        <span style={{ fontSize: '13px', whiteSpace: 'nowrap', color: '#4b5563', fontWeight: 500 }}>
-          🌐 Dịch sau
-        </span>
-        <input
-          type="range"
-          min={2} max={10} step={1}
-          value={silenceSeconds}
-          onChange={(e) => setSilenceSeconds(Number(e.target.value))}
-          disabled={conv.isListening}
-          style={{ flex: 1, accentColor: '#0ea5e9', cursor: conv.isListening ? 'not-allowed' : 'pointer' }}
-        />
-        <span style={{
-          fontSize: '13px', fontWeight: 700, color: '#0ea5e9',
-          minWidth: 40, textAlign: 'center',
-        }}>
-          {silenceSeconds}s
-        </span>
-      </div>
-
-      {/* ===== STT PREVIEW ===== */}
-      {interimText && (
-        <div style={{
-          margin: '0 16px 12px',
-          padding: '12px 16px',
-          background: 'rgba(14, 165, 233, 0.05)',
-          borderRadius: '12px',
-          border: '1px dashed rgba(14, 165, 233, 0.3)',
-        }}>
-          <div style={{ fontSize: '14px', color: '#4b5563', lineHeight: 1.5 }}>
-            <span style={{ fontSize: '11px', opacity: 0.6, marginRight: 6 }}>
-              {conv.activeLang ? getFlagForLang(conv.activeLang) : '🎤'}
-            </span>
-            {interimText}
-            <span style={{ display: 'inline-block', width: 2, height: 16, background: '#0ea5e9', marginLeft: 2, animation: 'blink 1s infinite' }} />
-          </div>
-        </div>
-      )}
-
-      {/* ===== LỊCH SỬ HỘI THOẠI ===== */}
-      <div className="conv-log">
+    <div className="conv-auto" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* ===== LỊCH SỬ HỘI THOẠI (ĐẦU TIÊN) ===== */}
+      <div className="conv-log" style={{ flex: 1, minHeight: 0 }}>
         <div className="conv-log-header">
           <span>💬 Cuộc hội thoại</span>
           <div className="panel-actions">
@@ -256,6 +151,115 @@ export default function ConversationPanel({
               </div>
             );
           })}
+        </div>
+      </div>
+
+      {/* ===== STT PREVIEW ===== */}
+      {interimText && (
+        <div style={{
+          margin: '0 16px 8px',
+          padding: '12px 16px',
+          background: 'rgba(14, 165, 233, 0.05)',
+          borderRadius: '12px',
+          border: '1px dashed rgba(14, 165, 233, 0.3)',
+        }}>
+          <div style={{ fontSize: '14px', color: '#4b5563', lineHeight: 1.5 }}>
+            <span style={{ fontSize: '11px', opacity: 0.6, marginRight: 6 }}>
+              {conv.activeLang ? getFlagForLang(conv.activeLang) : '🎤'}
+            </span>
+            {interimText}
+            <span style={{ display: 'inline-block', width: 2, height: 16, background: '#0ea5e9', marginLeft: 2, animation: 'blink 1s infinite' }} />
+          </div>
+        </div>
+      )}
+
+      {/* ===== PHẦN ĐIỀU KHIỂN (DƯỚI CÙNG) ===== */}
+      <div className="conv-bottom-controls">
+        {/* Cảnh báo */}
+        <div style={{ fontSize: '0.72rem', color: '#ff4d4f', textAlign: 'center', lineHeight: 1.6, fontWeight: 600, background: 'rgba(255,77,79,0.08)', borderRadius: 8, padding: '6px 12px', border: '1px solid rgba(255,77,79,0.2)', margin: '0 16px 8px' }}>
+          ⚠️ Không nên thu âm quá 3 phút để dịch chính xác nhất!
+        </div>
+
+        {/* 2 NÚT MIC */}
+        <div className="ptt-controls">
+          {/* Nút Tiếng Việt */}
+          <div className="ptt-group">
+            <button
+              className={`ptt-btn ${conv.activeLang === srcLang.translateCode ? 'recording' : ''}`}
+              disabled={isBusy || (conv.isListening && conv.activeLang !== srcLang.translateCode)}
+              onClick={() => handleStartLang(srcLang.translateCode)}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <span className="ptt-btn-icon">
+                {conv.activeLang === srcLang.translateCode && convStatus === 'speaking' ? '🔊' :
+                 conv.activeLang === srcLang.translateCode && convStatus === 'translating' ? '⏳' :
+                 conv.activeLang === srcLang.translateCode ? '⏹' : '🎤'}
+              </span>
+              {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
+              {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
+            </button>
+            <div className="ptt-label">{srcLang.flag} {srcLang.name}</div>
+          </div>
+
+          {/* Trạng thái ở giữa */}
+          <div className="ptt-hint">
+            {convStatus === 'idle' && '👆 Chọn ngôn ngữ'}
+            {convStatus === 'listening' && '🟢 Đang nghe...'}
+            {convStatus === 'translating' && '⏳ Đang dịch...'}
+            {convStatus === 'speaking' && '🔊 Đang phát...'}
+          </div>
+
+          {/* Nút 中文 */}
+          <div className="ptt-group">
+            <button
+              className={`ptt-btn ${conv.activeLang === tgtLang.translateCode ? 'recording' : ''}`}
+              disabled={isBusy || (conv.isListening && conv.activeLang !== tgtLang.translateCode)}
+              onClick={() => handleStartLang(tgtLang.translateCode)}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              <span className="ptt-btn-icon">
+                {conv.activeLang === tgtLang.translateCode && convStatus === 'speaking' ? '🔊' :
+                 conv.activeLang === tgtLang.translateCode && convStatus === 'translating' ? '⏳' :
+                 conv.activeLang === tgtLang.translateCode ? '⏹' : '🎤'}
+              </span>
+              {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
+              {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
+            </button>
+            <div className="ptt-label">{tgtLang.flag} {tgtLang.name}</div>
+          </div>
+        </div>
+
+        {/* Timer + Info */}
+        {conv.isListening && (
+          <div style={{ textAlign: 'center', marginTop: '-4px', marginBottom: '4px' }}>
+            <div className="ptt-timer">{formatTime(conv.elapsed)}</div>
+          </div>
+        )}
+
+        {/* CÀI ĐẶT THỜI GIAN IM LẶNG */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          margin: '0 16px 8px', padding: '8px 14px',
+          background: 'rgba(14, 165, 233, 0.05)',
+          borderRadius: 10, border: '1px solid rgba(14, 165, 233, 0.15)',
+        }}>
+          <span style={{ fontSize: '13px', whiteSpace: 'nowrap', color: '#4b5563', fontWeight: 500 }}>
+            🌐 Dịch sau
+          </span>
+          <input
+            type="range"
+            min={2} max={10} step={1}
+            value={silenceSeconds}
+            onChange={(e) => setSilenceSeconds(Number(e.target.value))}
+            disabled={conv.isListening}
+            style={{ flex: 1, accentColor: '#0ea5e9', cursor: conv.isListening ? 'not-allowed' : 'pointer' }}
+          />
+          <span style={{
+            fontSize: '13px', fontWeight: 700, color: '#0ea5e9',
+            minWidth: 40, textAlign: 'center',
+          }}>
+            {silenceSeconds}s
+          </span>
         </div>
       </div>
     </div>
