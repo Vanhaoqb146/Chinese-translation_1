@@ -1,23 +1,23 @@
 /* ============================================
-   VoiceTranslate AI — Next.js Premium Dark Theme
+   VoiceTranslate AI — Modern Ocean Blue Theme
    ============================================ */
 
 :root {
   --bg: #f8fafc;
-  --bg2: #f1f5f9;
-  --card: rgba(255, 255, 255, 0.75);
-  --border: rgba(0, 0, 0, 0.08);
-  --border-h: rgba(0, 0, 0, 0.15);
-  --text: #0f172a;
-  --text2: #475569;
-  --muted: #94a3b8;
-  --accent1: #6366f1;
-  --accent2: #a855f7;
-  --accent3: #ec4899;
-  --success: #22c55e;
+  --bg2: #f0f4f8;
+  --card: rgba(255, 255, 255, 0.8);
+  --border: rgba(0, 0, 0, 0.07);
+  --border-h: rgba(0, 0, 0, 0.12);
+  --text: #0c1a2a;
+  --text2: #4a5e74;
+  --muted: #8fa3b8;
+  --accent1: #0ea5e9;
+  --accent2: #06b6d4;
+  --accent3: #0284c7;
+  --success: #10b981;
   --danger: #ef4444;
-  --gradient: linear-gradient(135deg, #6366f1, #a855f7, #ec4899);
-  --glow: rgba(99, 102, 241, 0.2);
+  --gradient: linear-gradient(135deg, #0ea5e9, #06b6d4, #10b981);
+  --glow: rgba(14, 165, 233, 0.18);
   --r-sm: 8px;
   --r-md: 12px;
   --r-lg: 16px;
@@ -48,7 +48,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
 .logo h1 { font-size: 22px; font-weight: 800; background: var(--gradient); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 .badge { font-size: 10px; font-weight: 700; background: var(--gradient); -webkit-background-clip: unset; background-clip: unset; -webkit-text-fill-color: white; padding: 2px 7px; border-radius: 99px; vertical-align: super; letter-spacing: 1px; }
 .settings-btn { background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 50%; width: 40px; height: 40px; cursor: pointer; font-size: 18px; transition: all 0.3s; display: flex; align-items: center; justify-content: center; }
-.settings-btn:hover { border-color: var(--accent2); background: rgba(168,85,247,0.1); transform: rotate(45deg); }
+.settings-btn:hover { border-color: var(--accent2); background: rgba(6,182,212,0.1); transform: rotate(45deg); }
 
 /* ============== MODE SWITCHER ============== */
 .mode-switcher { display: flex; background: rgba(255,255,255,0.04); padding: 4px; border-radius: 12px; border: 1px solid var(--border); gap: 2px; }
@@ -69,7 +69,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
 .lang-chip { display: flex; align-items: center; gap: 8px; padding: 6px 18px; border-radius: 99px; font-size: 15px; font-weight: 600; background: rgba(255,255,255,0.04); border: 1px solid var(--border); }
 .lang-chip .flag { font-size: 20px; }
 .swap-btn { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--border); background: rgba(255,255,255,0.04); color: var(--accent2); font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.3s; }
-.swap-btn:hover { border-color: var(--accent2); background: rgba(168,85,247,0.15); transform: rotate(180deg); box-shadow: 0 0 15px rgba(168,85,247,0.2); }
+.swap-btn:hover { border-color: var(--accent2); background: rgba(6,182,212,0.12); transform: rotate(180deg); box-shadow: 0 0 15px rgba(6,182,212,0.2); }
 
 /* ============== PANELS ============== */
 .panels { display: grid; grid-template-columns: 1fr auto 1fr; gap: 0; margin-bottom: 24px; align-items: stretch; }
@@ -92,8 +92,8 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
 .panel-footer { padding: 12px 16px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 12px; background: rgba(0,0,0,0.02); }
 .mic-btn { position: relative; display: flex; align-items: center; gap: 8px; padding: 10px 24px; border-radius: 99px; border: none; background: var(--accent1); color: white; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.3s; box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3); }
 .mic-btn:hover { background: #4f46e5; transform: translateY(-1px); box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4); }
-.mic-btn.recording { background: var(--accent3); color: white; animation: mic-pulse 1.5s ease-in-out infinite; box-shadow: 0 4px 15px rgba(236,72,153,0.4); }
-@keyframes mic-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(236,72,153,0.4); } 50% { box-shadow: 0 0 0 10px rgba(236,72,153,0); } }
+.mic-btn.recording { background: var(--accent3); color: white; animation: mic-pulse 1.5s ease-in-out infinite; box-shadow: 0 4px 15px rgba(2,132,199,0.4); }
+@keyframes mic-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(2,132,199,0.4); } 50% { box-shadow: 0 0 0 10px rgba(2,132,199,0); } }
 .mic-icon { font-size: 16px; }
 .timer { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent2); }
 .translating-badge { font-size: 12px; color: var(--accent2); font-weight: 500; margin-left: auto; animation: fadeIn 0.3s; }
@@ -127,11 +127,11 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
 .conv-auto-btn { position: relative; width: 80px; height: 80px; border-radius: 50%; border: none; cursor: pointer; background: transparent; padding: 0; outline: none; z-index: 2; }
 .conv-auto-btn-inner { width: 100%; height: 100%; border-radius: 50%; background: var(--gradient); border: 4px solid white; display: flex; align-items: center; justify-content: center; font-size: 28px; transition: all 0.3s; z-index: 2; position: relative; box-shadow: 0 10px 25px var(--glow); color: white; }
 .conv-auto-btn:hover .conv-auto-btn-inner { box-shadow: 0 15px 35px rgba(168,85,247,0.4); transform: scale(1.05); }
-.conv-auto-btn.active .conv-auto-btn-inner { background: var(--accent3); border-color: rgba(236,72,153,0.3); color: white; box-shadow: 0 0 40px rgba(236,72,153,0.5); }
+.conv-auto-btn.active .conv-auto-btn-inner { background: var(--accent3); border-color: rgba(2,132,199,0.3); color: white; box-shadow: 0 0 40px rgba(2,132,199,0.4); }
 .conv-auto-btn.active .pulse-ring { display: block; }
-.pulse-ring { position: absolute; inset: -4px; border-radius: 50%; border: 3px solid var(--accent3); opacity: 0; animation: pulse 2s ease-out infinite; pointer-events: none; display: none; }
+.pulse-ring { position: absolute; inset: -4px; border-radius: 50%; border: 3px solid var(--accent1); opacity: 0; animation: pulse 2s ease-out infinite; pointer-events: none; display: none; }
 .pulse-ring.p2 { animation-delay: 1s; }
-@keyframes pulse { 0% { transform: scale(1); opacity: 0.8; } 100% { transform: scale(2.2); opacity: 0; } }
+@keyframes pulse { 0% { transform: scale(1); opacity: 0.7; } 100% { transform: scale(2.2); opacity: 0; } }
 
 .conv-auto-status { font-size: 16px; font-weight: 600; color: var(--text); text-align: center; }
 .conv-auto-info { font-size: 13px; font-weight: 500; color: var(--accent1); background: rgba(99, 102, 241, 0.1); padding: 6px 16px; border-radius: 99px; border: 1px solid rgba(99, 102, 241, 0.2); }
@@ -204,7 +204,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
 
 .ptt-btn:hover:not(:disabled) {
   transform: scale(1.05);
-  box-shadow: 0 15px 35px rgba(168,85,247,0.4);
+  box-shadow: 0 15px 35px rgba(14,165,233,0.3);
 }
 
 .ptt-btn:active:not(:disabled) {
@@ -218,9 +218,9 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
 }
 
 .ptt-btn.recording {
-  background: var(--accent3);
-  border-color: rgba(236,72,153,0.3);
-  box-shadow: 0 0 40px rgba(236,72,153,0.5);
+  background: linear-gradient(135deg, #0ea5e9, #0284c7);
+  border-color: rgba(14,165,233,0.3);
+  box-shadow: 0 0 40px rgba(14,165,233,0.4);
   animation: ptt-glow 1.5s ease-in-out infinite;
 }
 
@@ -235,8 +235,8 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
 }
 
 @keyframes ptt-glow {
-  0%, 100% { box-shadow: 0 0 20px rgba(236,72,153,0.4); }
-  50% { box-shadow: 0 0 50px rgba(236,72,153,0.7); }
+  0%, 100% { box-shadow: 0 0 20px rgba(14,165,233,0.3); }
+  50% { box-shadow: 0 0 50px rgba(14,165,233,0.5); }
 }
 
 .ptt-btn-icon {
@@ -298,4 +298,10 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
   .hi-arrow { display: none; }
   .settings-panel { flex-direction: column; }
   .lang-bar { flex-wrap: wrap; gap: 10px; }
+}
+
+/* Typing cursor blink animation */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }

@@ -64,6 +64,73 @@ REMEMBER: You are a TRANSLATION ENGINE, not a chatbot. Your output must ALWAYS b
       messages.push({ role: 'user', content: `Translate the following from ${sourceName} to ${targetName}. Output ONLY the translation:\n${text}` });
 
       try {
+        // ====== STREAMING MODE (Conversation) ======
+        if (body.stream) {
+          const res = await fetch(cfg.url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model: cfg.model,
+              messages,
+              max_tokens: 1000,
+              temperature: 0.2,
+              stream: true,
+            }),
+            signal: AbortSignal.timeout(30000),
+          });
+
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}));
+            throw new Error(errData.error?.message || `API error ${res.status}`);
+          }
+
+          // Pipe GPT SSE stream thẳng về browser
+          const { readable, writable } = new TransformStream();
+          const writer = writable.getWriter();
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+
+          (async () => {
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                const text = decoder.decode(value, { stream: true });
+                const lines = text.split('\n');
+                for (const line of lines) {
+                  if (!line.startsWith('data: ')) continue;
+                  const data = line.slice(6).trim();
+                  if (data === '[DONE]') {
+                    await writer.write(new TextEncoder().encode('data: [DONE]\n\n'));
+                    break;
+                  }
+                  try {
+                    const parsed = JSON.parse(data);
+                    const delta = parsed.choices?.[0]?.delta?.content;
+                    if (delta) {
+                      await writer.write(new TextEncoder().encode(`data: ${JSON.stringify({ text: delta })}\n\n`));
+                    }
+                  } catch {}
+                }
+              }
+            } finally {
+              writer.close();
+            }
+          })();
+
+          return new Response(readable, {
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive',
+            },
+          });
+        }
+
+        // ====== NON-STREAMING MODE (Standard — giữ nguyên) ======
         const res = await fetch(cfg.url, {
           method: 'POST',
           headers: {
@@ -72,9 +139,9 @@ REMEMBER: You are a TRANSLATION ENGINE, not a chatbot. Your output must ALWAYS b
           },
           body: JSON.stringify({
             model: cfg.model,
-            messages: messages, // Sử dụng mảng messages mới
-            max_tokens: 1000,   // Giảm token xuống vì dịch câu ngắn không cần tới 4000
-            temperature: 0.2,   // Giảm nhiệt độ để câu dịch chuẩn xác và ít bay bổng sai lệch hơn
+            messages: messages,
+            max_tokens: 1000,
+            temperature: 0.2,
           }),
           signal: AbortSignal.timeout(25000),
         });

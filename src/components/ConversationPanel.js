@@ -1,13 +1,12 @@
 'use client';
 import { useState, useRef, useCallback } from 'react';
-import useAutoConversation from '@/hooks/useAutoConversation';
+import useRealtimeConversation from '@/hooks/useRealtimeConversation';
 
 /**
- * ConversationPanel — Giao diện chế độ "Giao tiếp" (Toggle Mic)
+ * ConversationPanel — 2 Mic Buttons (Tiếng Việt / 中文)
  *
- * Click mic để BẮT ĐẦU phiên hội thoại → Nói → Tự động nhận diện khi ngừng nói
- * → Dịch → Phát âm (TTS) → Tắt mic tạm thời khi TTS → Bật lại mic
- * Click mic LẦN NỮA để KẾT THÚC phiên.
+ * Mỗi nút bấm → start(lang) → Deepgram nhận diện ngôn ngữ đó
+ * 4s im → REST translate → TTS → resume
  */
 export default function ConversationPanel({
   apiKey,
@@ -21,121 +20,57 @@ export default function ConversationPanel({
   setHistory,
 }) {
   const [convStatus, setConvStatus] = useState('idle');
-  // idle | listening | processing | speaking
-  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [interimText, setInterimText] = useState('');
+  const [silenceSeconds, setSilenceSeconds] = useState(4);
   const logBodyRef = useRef(null);
-  const autoConvRef = useRef(null);
 
-  // ====== Callbacks cho hook useAutoConversation ======
-  const handleTranscribed = useCallback(({ originalText, detectedLang, fromLang, toLang, id }) => {
-    setConvStatus('processing');
+  const handleInterimText = useCallback((text) => setInterimText(text), []);
+
+  const handleFinalResult = useCallback(({ originalText, translatedText, fromLang, toLang, id }) => {
     setHistory(prev => [{
       source: originalText,
-      target: '⏳ Đang dịch...',
-      fromLang,
-      toLang,
+      target: translatedText,
+      fromLang, toLang,
       time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       id,
     }, ...prev].slice(0, 100));
-
+    setInterimText('');
     setTimeout(() => {
       if (logBodyRef.current) logBodyRef.current.scrollTop = logBodyRef.current.scrollHeight;
     }, 50);
-  }, []);
+  }, [setHistory]);
 
-  // ====== TTS Queue — phát lần lượt, chunk 2 chờ chunk 1 xong ======
-  const ttsQueueRef = useRef([]);
-  const isPlayingRef = useRef(false);
-
-  const processTtsQueue = useCallback(async () => {
-    if (isPlayingRef.current) return; // Đang phát → không xen vào
-    if (ttsQueueRef.current.length === 0) return;
-
-    isPlayingRef.current = true;
-    const { translatedText, toLang } = ttsQueueRef.current.shift();
-    const toSttCode = findSttCode(toLang);
-
-    setIsSpeaking(true);
-    setConvStatus('speaking');
-    if (autoConvRef.current) autoConvRef.current.pause();
-
-    try {
-      await speak(translatedText, toSttCode);
-    } finally {
-      setIsSpeaking(false);
-      if (autoConvRef.current) autoConvRef.current.resume();
-      isPlayingRef.current = false;
-
-      // Còn job trong queue → phát tiếp
-      if (ttsQueueRef.current.length > 0) {
-        processTtsQueue();
-      } else {
-        setConvStatus('listening');
-      }
-    }
-  }, [speak, findSttCode]);
-
-  const handleResult = useCallback(async ({ translatedText, toLang, id }) => {
-    setHistory(prev => prev.map(item =>
-      item.id === id ? { ...item, target: translatedText } : item
-    ));
-
-    // Thêm vào queue TTS thay vì phát ngay
-    ttsQueueRef.current.push({ translatedText, toLang });
-    processTtsQueue();
-  }, [processTtsQueue]);
-
-  const handleTranslating = useCallback((isTranslating) => {
-    if (isTranslating) {
-      setConvStatus('processing');
-    } else {
-      // [FIX] Khi xử lý xong (kể cả Whisper trả rỗng), phải reset UI về 'listening'
-      // Nếu không có else này, UI sẽ bị treo vĩnh viễn ở "Đang xử lý..."
-      setConvStatus(prev => prev === 'processing' ? 'listening' : prev);
-    }
-  }, []);
-
+  const handleStatusChange = useCallback((status) => setConvStatus(status), []);
   const handleError = useCallback((msg) => {
     setConvStatus('idle');
-    setIsSpeaking(false);
     console.warn('Conversation Error:', msg);
   }, []);
 
-  // ====== Hook Auto Conversation (VAD-based) ======
-  const autoConv = useAutoConversation({
-    apiKey,
-    engine,
+  const conv = useRealtimeConversation({
     srcLangCode: srcLang.translateCode,
     tgtLangCode: tgtLang.translateCode,
-    onTranscribed: handleTranscribed,
-    onResult: handleResult,
-    onTranslating: handleTranslating,
+    engine,
+    silenceMs: silenceSeconds * 1000,
+    onInterimText: handleInterimText,
+    onFinalResult: handleFinalResult,
+    onStatusChange: handleStatusChange,
     onError: handleError,
   });
 
-  // Lưu ref để pause/resume bên callbacks
-  autoConvRef.current = autoConv;
-
-  // ====== Toggle mic: Click 1 lần bật, click lần nữa tắt ======
-  const handleToggleMic = useCallback(() => {
-    if (isSpeaking) return; // Không cho thao tác khi đang phát TTS
-
-    if (autoConv.isListening) {
-      // DỪNG phiên hội thoại
-      autoConv.stop();
-      setConvStatus('idle');
+  // Bấm nút ngôn ngữ → start(lang)
+  const handleStartLang = useCallback((lang) => {
+    if (conv.isListening) {
+      conv.stop();
     } else {
-      // BẮT ĐẦU phiên hội thoại
-      autoConv.start();
-      setConvStatus('listening');
+      conv.start(lang);
     }
-  }, [autoConv, isSpeaking]);
+  }, [conv]);
 
   const handleClearHistory = useCallback(() => {
     setHistory([]);
-  }, []);
+    setInterimText('');
+  }, [setHistory]);
 
-  // ====== Helpers ======
   const formatTime = (s) => {
     const m = Math.floor(s / 60);
     const sec = s % 60;
@@ -147,46 +82,114 @@ export default function ConversationPanel({
     return lang ? lang.flag : '🌐';
   };
 
+  const isBusy = convStatus === 'translating' || convStatus === 'speaking';
+
   return (
     <div className="conv-auto">
-      {/* ===== NÚT MIC TRUNG TÂM (TOGGLE) ===== */}
+      {/* ===== 2 NÚT MIC ===== */}
       <div className="ptt-controls">
+        {/* Nút Tiếng Việt */}
         <div className="ptt-group">
           <button
-            className={`ptt-btn ${autoConv.isListening ? 'recording' : ''} ${convStatus === 'processing' ? 'processing' : ''}`}
-            disabled={isSpeaking}
-            onClick={handleToggleMic}
+            className={`ptt-btn ${conv.activeLang === srcLang.translateCode ? 'recording' : ''}`}
+            disabled={isBusy || (conv.isListening && conv.activeLang !== srcLang.translateCode)}
+            onClick={() => handleStartLang(srcLang.translateCode)}
             onContextMenu={(e) => e.preventDefault()}
           >
             <span className="ptt-btn-icon">
-              {isSpeaking ? '🔊' : convStatus === 'processing' ? '⏳' : autoConv.isListening ? '⏹' : '🎤'}
+              {conv.activeLang === srcLang.translateCode && convStatus === 'speaking' ? '🔊' :
+               conv.activeLang === srcLang.translateCode && convStatus === 'translating' ? '⏳' :
+               conv.activeLang === srcLang.translateCode ? '⏹' : '🎤'}
             </span>
-            {autoConv.isListening && !isSpeaking && convStatus !== 'processing' && <span className="pulse-ring" />}
-            {autoConv.isListening && !isSpeaking && convStatus !== 'processing' && <span className="pulse-ring p2" />}
+            {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
+            {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
           </button>
+          <div className="ptt-label">{srcLang.flag} {srcLang.name}</div>
+        </div>
 
-          {/* Trạng thái */}
-          <div className="ptt-hint" style={{ paddingTop: 0 }}>
-            {convStatus === 'idle' && '👆 Nhấn để bắt đầu hội thoại'}
-            {convStatus === 'listening' && '🟢 Đang lắng nghe...'}
-            {convStatus === 'processing' && '⏳ Đang xử lý...'}
-            {convStatus === 'speaking' && '🔊 Đang phát âm...'}
-          </div>
+        {/* Trạng thái ở giữa */}
+        <div className="ptt-hint">
+          {convStatus === 'idle' && '👆 Chọn ngôn ngữ'}
+          {convStatus === 'listening' && '🟢 Đang nghe...'}
+          {convStatus === 'translating' && '⏳ Đang dịch...'}
+          {convStatus === 'speaking' && '🔊 Đang phát...'}
+        </div>
 
-          {/* Timer */}
-          {autoConv.isListening && (
-            <div className="ptt-timer">{formatTime(autoConv.elapsed)}</div>
-          )}
-
-          <div className="ptt-auto-detect-label">
-            Tự động nhận diện {srcLang.flag} {srcLang.name} hoặc {tgtLang.flag} {tgtLang.name}
-          </div>
-          <div style={{ fontSize: '0.75rem', color: '#ff4d4f', marginTop: 8, textAlign: 'center', lineHeight: 1.5, fontWeight: 600, background: 'rgba(255,77,79,0.1)', borderRadius: 8, padding: '6px 12px', border: '1px solid rgba(255,77,79,0.25)' }}>
-            ⚠️ Nói không quá 1p30s/lượt để đảm bảo chất lượng dịch· Nếu quá 1p30s sẽ tự động ngắt.
-            🌐Tự động dịch sau 4s ngừng nói
-          </div>
+        {/* Nút 中文 */}
+        <div className="ptt-group">
+          <button
+            className={`ptt-btn ${conv.activeLang === tgtLang.translateCode ? 'recording' : ''}`}
+            disabled={isBusy || (conv.isListening && conv.activeLang !== tgtLang.translateCode)}
+            onClick={() => handleStartLang(tgtLang.translateCode)}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            <span className="ptt-btn-icon">
+              {conv.activeLang === tgtLang.translateCode && convStatus === 'speaking' ? '🔊' :
+               conv.activeLang === tgtLang.translateCode && convStatus === 'translating' ? '⏳' :
+               conv.activeLang === tgtLang.translateCode ? '⏹' : '🎤'}
+            </span>
+            {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
+            {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
+          </button>
+          <div className="ptt-label">{tgtLang.flag} {tgtLang.name}</div>
         </div>
       </div>
+
+      {/* Timer + Info */}
+      {conv.isListening && (
+        <div style={{ textAlign: 'center', marginTop: '-8px', marginBottom: '8px' }}>
+          <div className="ptt-timer">{formatTime(conv.elapsed)}</div>
+        </div>
+      )}
+
+      <div style={{ fontSize: '0.72rem', color: '#ff4d4f', textAlign: 'center', lineHeight: 1.6, fontWeight: 600, background: 'rgba(255,77,79,0.08)', borderRadius: 8, padding: '6px 12px', border: '1px solid rgba(255,77,79,0.2)', margin: '0 16px 12px' }}>
+        ⚠️ Không nên thu âm quá 3 phút để dịch chính xác nhất!
+      </div>
+
+      {/* ===== CÀI ĐẶT THỜI GIAN IM LẶNG ===== */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        margin: '0 16px 12px', padding: '8px 14px',
+        background: 'rgba(14, 165, 233, 0.05)',
+        borderRadius: 10, border: '1px solid rgba(14, 165, 233, 0.15)',
+      }}>
+        <span style={{ fontSize: '13px', whiteSpace: 'nowrap', color: '#4b5563', fontWeight: 500 }}>
+          🌐 Dịch sau
+        </span>
+        <input
+          type="range"
+          min={2} max={10} step={1}
+          value={silenceSeconds}
+          onChange={(e) => setSilenceSeconds(Number(e.target.value))}
+          disabled={conv.isListening}
+          style={{ flex: 1, accentColor: '#0ea5e9', cursor: conv.isListening ? 'not-allowed' : 'pointer' }}
+        />
+        <span style={{
+          fontSize: '13px', fontWeight: 700, color: '#0ea5e9',
+          minWidth: 40, textAlign: 'center',
+        }}>
+          {silenceSeconds}s
+        </span>
+      </div>
+
+      {/* ===== STT PREVIEW ===== */}
+      {interimText && (
+        <div style={{
+          margin: '0 16px 12px',
+          padding: '12px 16px',
+          background: 'rgba(14, 165, 233, 0.05)',
+          borderRadius: '12px',
+          border: '1px dashed rgba(14, 165, 233, 0.3)',
+        }}>
+          <div style={{ fontSize: '14px', color: '#4b5563', lineHeight: 1.5 }}>
+            <span style={{ fontSize: '11px', opacity: 0.6, marginRight: 6 }}>
+              {conv.activeLang ? getFlagForLang(conv.activeLang) : '🎤'}
+            </span>
+            {interimText}
+            <span style={{ display: 'inline-block', width: 2, height: 16, background: '#0ea5e9', marginLeft: 2, animation: 'blink 1s infinite' }} />
+          </div>
+        </div>
+      )}
 
       {/* ===== LỊCH SỬ HỘI THOẠI ===== */}
       <div className="conv-log">
@@ -202,19 +205,19 @@ export default function ConversationPanel({
               <div className="conv-empty-icon">💬</div>
               <div>Nhấn nút micro để bắt đầu</div>
               <div className="conv-empty-sub">
-                Nói {srcLang.flag} {srcLang.name} hoặc {tgtLang.flag} {tgtLang.name} — Tự động nhận diện!
+                Chọn {srcLang.flag} {srcLang.name} hoặc {tgtLang.flag} {tgtLang.name}
               </div>
             </div>
           )}
-          {history.slice().reverse().map((h) => {
+          {history.slice().reverse().map((h, index) => {
             const isSourceSpeaker = h.fromLang === srcLang.translateCode;
             const alignment = isSourceSpeaker ? 'flex-start' : 'flex-end';
-            const bubbleBg = isSourceSpeaker ? 'white' : 'linear-gradient(135deg, #8b5cf6, #d946ef)';
+            const bubbleBg = isSourceSpeaker ? 'white' : 'linear-gradient(135deg, #0ea5e9, #06b6d4)';
             const textColor = isSourceSpeaker ? '#1f2937' : 'white';
             const borderColor = isSourceSpeaker ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.2)';
 
             return (
-              <div key={h.id} style={{ display: 'flex', flexDirection: 'column', alignItems: alignment, marginBottom: '20px', width: '100%' }}>
+              <div key={`msg-${h.id}-${index}`} style={{ display: 'flex', flexDirection: 'column', alignItems: alignment, marginBottom: '20px', width: '100%' }}>
                 <div style={{
                   background: bubbleBg,
                   color: textColor,
@@ -226,12 +229,9 @@ export default function ConversationPanel({
                   flexDirection: 'column',
                   gap: '10px'
                 }}>
-                  {/* CÂU GỐC */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${borderColor}`, paddingBottom: '8px' }}>
                     <span style={{ fontSize: '15px', fontWeight: '500', lineHeight: '1.4' }}>
-                      <span style={{ fontSize: '12px', opacity: 0.8, marginRight: '8px' }}>
-                        {getFlagForLang(h.fromLang)}
-                      </span>
+                      <span style={{ fontSize: '12px', opacity: 0.8, marginRight: '8px' }}>{getFlagForLang(h.fromLang)}</span>
                       {h.source}
                     </span>
                     <button
@@ -240,13 +240,9 @@ export default function ConversationPanel({
                       title="Nghe lại câu gốc"
                     >🔊</button>
                   </div>
-
-                  {/* CÂU DỊCH */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: '15px', lineHeight: '1.4' }}>
-                      <span style={{ fontSize: '12px', opacity: 0.8, marginRight: '8px' }}>
-                        {getFlagForLang(h.toLang)}
-                      </span>
+                      <span style={{ fontSize: '12px', opacity: 0.8, marginRight: '8px' }}>{getFlagForLang(h.toLang)}</span>
                       {h.target}
                     </span>
                     <button
@@ -256,11 +252,7 @@ export default function ConversationPanel({
                     >🔊</button>
                   </div>
                 </div>
-
-                {/* THỜI GIAN */}
-                <span style={{ fontSize: '11px', opacity: 0.5, marginTop: '4px', padding: '0 8px' }}>
-                  {h.time}
-                </span>
+                <span style={{ fontSize: '11px', opacity: 0.5, marginTop: '4px', padding: '0 8px' }}>{h.time}</span>
               </div>
             );
           })}
