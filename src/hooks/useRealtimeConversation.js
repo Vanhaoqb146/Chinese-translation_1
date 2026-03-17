@@ -20,6 +20,7 @@ export default function useRealtimeConversation({
   onFinalResult,
   onStatusChange,
   onError,
+  getVoiceForLang,
 }) {
   const [isListening, setIsListening] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -52,6 +53,7 @@ export default function useRealtimeConversation({
   const onInterimTextRef = useRef(onInterimText);
   const engineRef = useRef(engine);
   const silenceMsRef = useRef(silenceMs);
+  const getVoiceForLangRef = useRef(getVoiceForLang);
 
   useEffect(() => {
     srcLangCodeRef.current = srcLangCode;
@@ -62,7 +64,128 @@ export default function useRealtimeConversation({
     onInterimTextRef.current = onInterimText;
     engineRef.current = engine;
     silenceMsRef.current = silenceMs;
+    getVoiceForLangRef.current = getVoiceForLang;
   });
+
+  // ====== PIPELINE: Dịch + TTS (dùng chung cho silence timer & manual stop) ======
+  const triggerTranslation = useCallback(async () => {
+    let text = accumulatedTextRef.current.trim();
+    if (!text && currentInterimRef.current.trim()) {
+      text = currentInterimRef.current.trim();
+    }
+    if (!text) return;
+
+    // Xác định chiều dịch từ inputLang
+    const fromLang = inputLangRef.current;
+    const toLang = fromLang === srcLangCodeRef.current
+      ? tgtLangCodeRef.current
+      : srcLangCodeRef.current;
+
+    console.log(`🔄 [Translate] "${text.slice(0, 80)}" (${fromLang}→${toLang})`);
+
+    // Khóa mic → Dịch → TTS
+    isSpeakingRef.current = true;
+    if (onStatusChangeRef.current) onStatusChangeRef.current('translating');
+
+    try {
+      const translateRes = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          sourceLang: fromLang,
+          targetLang: toLang,
+          engine: engineRef.current,
+          history: conversationHistoryRef.current,
+        }),
+        signal: AbortSignal.timeout(25000),
+      });
+
+      if (!translateRes.ok) throw new Error(`Translate error ${translateRes.status}`);
+      const { translation: translatedText } = await translateRes.json();
+      if (!translatedText) throw new Error('Empty translation');
+
+      console.log(`✅ [Translate] "${translatedText.slice(0, 60)}..."`);
+
+      const id = ++msgIdRef.current;
+      if (onFinalResultRef.current) {
+        onFinalResultRef.current({ id, originalText: text, translatedText, fromLang, toLang });
+      }
+
+      conversationHistoryRef.current.push(
+        { role: 'user', content: text },
+        { role: 'assistant', content: translatedText }
+      );
+      if (conversationHistoryRef.current.length > 8) {
+        conversationHistoryRef.current = conversationHistoryRef.current.slice(-8);
+      }
+
+      // TTS
+      if (onStatusChangeRef.current) onStatusChangeRef.current('speaking');
+
+      const sendKeepAlive = () => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'KeepAlive' }));
+        }
+      };
+      sendKeepAlive();
+      const keepAlive = setInterval(sendKeepAlive, 5000);
+
+      try {
+        const t0 = performance.now();
+        const voiceId = getVoiceForLangRef.current ? getVoiceForLangRef.current(toLang) : null;
+        const ttsRes = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: translatedText, lang: toLang, voice: voiceId }),
+          signal: AbortSignal.timeout(30000),
+        });
+
+        if (ttsRes.ok) {
+          const reader = ttsRes.body.getReader();
+          const chunks = [];
+          let firstChunkTime = 0;
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!firstChunkTime) {
+              firstChunkTime = performance.now();
+              console.log(`🔊 [TTS] First byte: ${Math.round(firstChunkTime - t0)}ms`);
+            }
+            chunks.push(value);
+          }
+
+          const blob = new Blob(chunks, { type: 'audio/mpeg' });
+          console.log(`🔊 [TTS] Full: ${blob.size} bytes in ${Math.round(performance.now() - t0)}ms`);
+
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.preload = 'auto';
+
+          await new Promise(resolve => {
+            audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+            audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+            audio.play().catch(() => resolve());
+          });
+        }
+      } finally {
+        clearInterval(keepAlive);
+      }
+    } catch (err) {
+      console.error('❌ [Pipeline]', err);
+      if (onErrorRef.current) onErrorRef.current(err.message);
+    }
+
+    // Dọn dẹp
+    accumulatedTextRef.current = '';
+    currentInterimRef.current = '';
+    isSpeakingRef.current = false;
+    if (onInterimTextRef.current) onInterimTextRef.current('');
+    if (wantListeningRef.current && onStatusChangeRef.current) {
+      onStatusChangeRef.current('listening');
+    }
+  }, []);
 
   // ====== BƯỚC 2: Silence Timer ======
   const resetSilenceTimer = useCallback(() => {
@@ -70,128 +193,11 @@ export default function useRealtimeConversation({
     if (isSpeakingRef.current) return;
 
     const timeout = silenceMsRef.current || 4000;
-    silenceTimeoutRef.current = setTimeout(async () => {
-      let text = accumulatedTextRef.current.trim();
-      if (!text && currentInterimRef.current.trim()) {
-        text = currentInterimRef.current.trim();
-      }
-      if (!text) return;
+    silenceTimeoutRef.current = setTimeout(() => {
       console.log(`⏰ [Silence] ${timeout / 1000}s timer fired!`);
-
-      // Xác định chiều dịch từ inputLang
-      const fromLang = inputLangRef.current;
-      const toLang = fromLang === srcLangCodeRef.current
-        ? tgtLangCodeRef.current
-        : srcLangCodeRef.current;
-
-      console.log(`⏰ [Silence] "${text.slice(0, 80)}" (${fromLang}→${toLang})`);
-
-      // ====== BƯỚC 3: Khóa mic → Dịch → TTS ======
-      isSpeakingRef.current = true;
-      if (onStatusChangeRef.current) onStatusChangeRef.current('translating');
-
-      try {
-        // 3b. REST translate
-        const translateRes = await fetch('/api/translate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text,
-            sourceLang: fromLang,
-            targetLang: toLang,
-            engine: engineRef.current,
-            history: conversationHistoryRef.current,
-          }),
-          signal: AbortSignal.timeout(25000),
-        });
-
-        if (!translateRes.ok) throw new Error(`Translate error ${translateRes.status}`);
-        const { translation: translatedText } = await translateRes.json();
-        if (!translatedText) throw new Error('Empty translation');
-
-        console.log(`✅ [Translate] "${translatedText.slice(0, 60)}..."`);
-
-        // 3c. UI + History
-        const id = ++msgIdRef.current;
-        if (onFinalResultRef.current) {
-          onFinalResultRef.current({ id, originalText: text, translatedText, fromLang, toLang });
-        }
-
-        conversationHistoryRef.current.push(
-          { role: 'user', content: text },
-          { role: 'assistant', content: translatedText }
-        );
-        if (conversationHistoryRef.current.length > 8) {
-          conversationHistoryRef.current = conversationHistoryRef.current.slice(-8);
-        }
-
-        // 3d. TTS — Stream play
-        if (onStatusChangeRef.current) onStatusChangeRef.current('speaking');
-
-        // KeepAlive giữ WS sống trong lúc TTS
-        const sendKeepAlive = () => {
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ type: 'KeepAlive' }));
-          }
-        };
-        sendKeepAlive();
-        const keepAlive = setInterval(sendKeepAlive, 5000);
-
-        try {
-          const t0 = performance.now();
-          const ttsRes = await fetch('/api/tts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: translatedText, lang: toLang }),
-            signal: AbortSignal.timeout(30000),
-          });
-
-          if (ttsRes.ok) {
-            const reader = ttsRes.body.getReader();
-            const chunks = [];
-            let firstChunkTime = 0;
-
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              if (!firstChunkTime) {
-                firstChunkTime = performance.now();
-                console.log(`🔊 [TTS] First byte: ${Math.round(firstChunkTime - t0)}ms`);
-              }
-              chunks.push(value);
-            }
-
-            const blob = new Blob(chunks, { type: 'audio/ogg' });
-            console.log(`🔊 [TTS] Full: ${blob.size} bytes in ${Math.round(performance.now() - t0)}ms`);
-
-            const url = URL.createObjectURL(blob);
-            const audio = new Audio(url);
-            audio.preload = 'auto';
-
-            await new Promise(resolve => {
-              audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-              audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-              audio.play().catch(() => resolve());
-            });
-          }
-        } finally {
-          clearInterval(keepAlive);
-        }
-      } catch (err) {
-        console.error('❌ [Pipeline]', err);
-        if (onErrorRef.current) onErrorRef.current(err.message);
-      }
-
-      // ====== BƯỚC 4: Dọn dẹp & Mở mic ======
-      accumulatedTextRef.current = '';
-      currentInterimRef.current = '';
-      isSpeakingRef.current = false;
-      if (onInterimTextRef.current) onInterimTextRef.current('');
-      if (wantListeningRef.current && onStatusChangeRef.current) {
-        onStatusChangeRef.current('listening');
-      }
+      triggerTranslation();
     }, timeout);
-  }, []);
+  }, [triggerTranslation]);
 
   // ====== BƯỚC 1: Start(inputLang) ======
   const start = useCallback(async (inputLang) => {
@@ -326,6 +332,7 @@ export default function useRealtimeConversation({
     clearTimeout(silenceTimeoutRef.current);
     clearInterval(elapsedTimerRef.current);
 
+    // Đóng WS + mic
     if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close(1000, 'stop');
     wsRef.current = null;
     if (processorRef.current) processorRef.current.disconnect();
@@ -334,8 +341,16 @@ export default function useRealtimeConversation({
 
     setIsListening(false);
     setActiveLang(null);
-    if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
-  }, []);
+
+    // Nếu có text tích lũy → dịch ngay (manual stop)
+    const hasText = accumulatedTextRef.current.trim() || currentInterimRef.current.trim();
+    if (hasText && !isSpeakingRef.current) {
+      console.log('🛑 [Stop] Có text → trigger dịch ngay!');
+      triggerTranslation();
+    } else {
+      if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
+    }
+  }, [triggerTranslation]);
 
   useEffect(() => {
     return () => {

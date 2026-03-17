@@ -2,6 +2,39 @@
 import { useState, useRef, useCallback } from 'react';
 import useRealtimeConversation from '@/hooks/useRealtimeConversation';
 
+// Voice options per language (verified via Edge TTS getVoices)
+const VOICE_OPTIONS = {
+  vi: [
+    { id: 'vi-VN-HoaiMyNeural', label: 'Nữ miền Bắc' },
+    { id: 'vi-VN-NamMinhNeural', label: 'Nam miền Bắc' },
+  ],
+  zh: [
+    { id: 'zh-CN-XiaoxiaoNeural', label: 'Nữ Phổ thông' },
+    { id: 'zh-CN-YunjianNeural', label: 'Nam Phổ thông' },
+    { id: 'zh-CN-YunxiNeural', label: 'Nam Thanh niên' },
+    { id: 'zh-CN-XiaoyiNeural', label: 'Nữ Thanh niên' },
+    { id: 'zh-CN-YunyangNeural', label: 'Nam MC tin tức' },
+    { id: 'zh-CN-liaoning-XiaobeiNeural', label: 'Nữ Đông Bắc' },
+    { id: 'zh-CN-shaanxi-XiaoniNeural', label: 'Nữ Thiểm Tây' },
+    { id: 'zh-HK-HiuGaaiNeural', label: 'Nữ Quảng Đông' },
+    { id: 'zh-TW-HsiaoChenNeural', label: 'Nữ Đài Loan' },
+  ],
+  en: [
+    { id: 'en-US-JennyNeural', label: 'Nữ Mỹ' },
+    { id: 'en-US-GuyNeural', label: 'Nam Mỹ' },
+    { id: 'en-US-AriaNeural', label: 'Nữ Aria' },
+    { id: 'en-US-BrianNeural', label: 'Nam Brian' },
+  ],
+  ja: [
+    { id: 'ja-JP-NanamiNeural', label: 'Nữ Nhật' },
+    { id: 'ja-JP-KeitaNeural', label: 'Nam Nhật' },
+  ],
+  ko: [
+    { id: 'ko-KR-SunHiNeural', label: 'Nữ Hàn' },
+    { id: 'ko-KR-InJoonNeural', label: 'Nam Hàn' },
+  ],
+};
+
 /**
  * ConversationPanel — 2 Mic Buttons (Tiếng Việt / 中文)
  *
@@ -22,6 +55,8 @@ export default function ConversationPanel({
   const [convStatus, setConvStatus] = useState('idle');
   const [interimText, setInterimText] = useState('');
   const [silenceSeconds, setSilenceSeconds] = useState(4);
+  const [srcVoice, setSrcVoice] = useState(() => (VOICE_OPTIONS[srcLang.translateCode]?.[0]?.id || ''));
+  const [tgtVoice, setTgtVoice] = useState(() => (VOICE_OPTIONS[tgtLang.translateCode]?.[0]?.id || ''));
   const logBodyRef = useRef(null);
 
   const handleInterimText = useCallback((text) => setInterimText(text), []);
@@ -46,6 +81,18 @@ export default function ConversationPanel({
     console.warn('Conversation Error:', msg);
   }, []);
 
+  // Callback để hook lấy voice theo ngôn ngữ đích
+  const srcVoiceRef = useRef(srcVoice);
+  const tgtVoiceRef = useRef(tgtVoice);
+  srcVoiceRef.current = srcVoice;
+  tgtVoiceRef.current = tgtVoice;
+
+  const getVoiceForLang = useCallback((toLang) => {
+    if (toLang === srcLang.translateCode) return srcVoiceRef.current;
+    if (toLang === tgtLang.translateCode) return tgtVoiceRef.current;
+    return null;
+  }, [srcLang.translateCode, tgtLang.translateCode]);
+
   const conv = useRealtimeConversation({
     srcLangCode: srcLang.translateCode,
     tgtLangCode: tgtLang.translateCode,
@@ -55,6 +102,7 @@ export default function ConversationPanel({
     onFinalResult: handleFinalResult,
     onStatusChange: handleStatusChange,
     onError: handleError,
+    getVoiceForLang,
   });
 
   // Bấm nút ngôn ngữ → start(lang)
@@ -85,9 +133,40 @@ export default function ConversationPanel({
   const isBusy = convStatus === 'translating' || convStatus === 'speaking';
 
   return (
-    <div className="conv-auto" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div className="conv-auto">
+      {/* ===== CHỌN GIỌNG ĐỌC ===== */}
+      <div className="voice-selector-row">
+        <span className="voice-selector-label">🔊 Giọng đọc:</span>
+        <div className="voice-selector-group">
+          <span className="voice-selector-lang">{srcLang.flag}</span>
+          <select
+            value={srcVoice}
+            onChange={(e) => setSrcVoice(e.target.value)}
+            disabled={conv.isListening}
+            className="voice-selector-select"
+          >
+            {(VOICE_OPTIONS[srcLang.translateCode] || []).map(v => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="voice-selector-group">
+          <span className="voice-selector-lang">{tgtLang.flag}</span>
+          <select
+            value={tgtVoice}
+            onChange={(e) => setTgtVoice(e.target.value)}
+            disabled={conv.isListening}
+            className="voice-selector-select"
+          >
+            {(VOICE_OPTIONS[tgtLang.translateCode] || []).map(v => (
+              <option key={v.id} value={v.id}>{v.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       {/* ===== LỊCH SỬ HỘI THOẠI (ĐẦU TIÊN) ===== */}
-      <div className="conv-log" style={{ flex: 1, minHeight: 0 }}>
+      <div className="conv-log">
         <div className="conv-log-header">
           <span>💬 Cuộc hội thoại</span>
           <div className="panel-actions">

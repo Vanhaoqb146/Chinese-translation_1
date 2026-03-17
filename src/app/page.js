@@ -13,17 +13,14 @@ const LANGUAGES = [
   { flag: '🇰🇷', name: '한국어', sttCode: 'ko-KR', translateCode: 'ko', ttsCode: 'ko-KR' },
 ];
 
-const TTS_LANG_MAP = {
-  'zh-CN': ['zh-CN', 'zh-TW', 'zh-HK'],
-  'vi-VN': ['vi-VN'],
-  'en-US': ['en-US', 'en-GB'],
-  'ja-JP': ['ja-JP'],
-  'ko-KR': ['ko-KR'],
-  zh: ['zh-CN', 'zh-TW'],
-  vi: ['vi-VN'],
-  en: ['en-US', 'en-GB'],
-  ja: ['ja-JP'],
-  ko: ['ko-KR'],
+
+// Default voices for standard mode (per translateCode)
+const DEFAULT_VOICES = {
+  zh: 'zh-CN-XiaoxiaoNeural',
+  vi: 'vi-VN-HoaiMyNeural',
+  en: 'en-US-JennyNeural',
+  ja: 'ja-JP-NanamiNeural',
+  ko: 'ko-KR-SunHiNeural',
 };
 
 export default function HomePage() {
@@ -47,10 +44,9 @@ export default function HomePage() {
   useEffect(() => { activeMicRef.current = activeMic; }, [activeMic]);
   const [toast, setToast] = useState('');
 
-  const [voicesReady, setVoicesReady] = useState(false);
-  const voicesRef = useRef([]);
   const sourceRef = useRef(null);
   const targetRef = useRef(null);
+  const ttsAbortRef = useRef(null);
 
   const [mounted, setMounted] = useState(false);
 
@@ -71,16 +67,7 @@ export default function HomePage() {
     localStorage.removeItem('vt_user');
   };
 
-  // Load voices
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-    const loadVoices = () => {
-      const v = window.speechSynthesis.getVoices();
-      if (v.length > 0) { voicesRef.current = v; setVoicesReady(true); }
-    };
-    loadVoices();
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-  }, []);
+  // Load voices — removed (using Edge TTS API now)
 
   const showToast = useCallback((msg) => {
     setToast(msg);
@@ -95,57 +82,45 @@ export default function HomePage() {
     return lang ? lang.ttsCode : translateCode;
   };
 
-  // TTS
-  const findVoice = (langCode) => {
-    const voices = voicesRef.current.length > 0 ? voicesRef.current : (typeof window !== 'undefined' ? window.speechSynthesis.getVoices() : []);
-    if (voices.length === 0) return null;
-    const candidates = TTS_LANG_MAP[langCode] || [langCode];
-    for (const c of candidates) { const f = voices.find(v => v.lang.replace('_', '-').toLowerCase() === c.toLowerCase() && v.name.includes('Google')); if (f) return f; }
-    for (const c of candidates) { const f = voices.find(v => v.lang.replace('_', '-').toLowerCase() === c.toLowerCase() && (v.name.includes('Online') || v.name.includes('Natural'))); if (f) return f; }
-    for (const c of candidates) { const f = voices.find(v => v.lang.replace('_', '-').toLowerCase() === c.toLowerCase()); if (f) return f; }
-    const baseLang = langCode.split('-')[0].toLowerCase();
-    return voices.find(v => v.lang.toLowerCase().startsWith(baseLang)) || null;
-  };
+  // TTS via Edge TTS API
+  const speak = useCallback((text, langCode) => {
+    return new Promise(async (resolve) => {
+      if (!text) return resolve();
 
-  const speak = (text, langCode) => {
-    return new Promise((resolve) => {
-      if (!text || typeof window === 'undefined' || !window.speechSynthesis) return resolve();
+      // Cancel previous TTS if any
+      if (ttsAbortRef.current) ttsAbortRef.current.abort();
+      const controller = new AbortController();
+      ttsAbortRef.current = controller;
 
-      // [FIX] Xóa mọi utterance cũ/bị kẹt trước khi phát mới
-      // Trên Chrome Mobile, queue TTS hay bị đơ sau lần phát đầu tiên
-      window.speechSynthesis.cancel();
+      try {
+        // Map langCode (e.g. 'zh-CN', 'vi-VN') to translateCode (e.g. 'zh', 'vi')
+        const baseLang = langCode.split('-')[0].toLowerCase();
+        const voice = DEFAULT_VOICES[baseLang] || DEFAULT_VOICES['en'];
 
-      // [OPT] queueMicrotask thay vì setTimeout(50) — cancel() hoàn tất đồng bộ
-      queueMicrotask(() => {
-        const chunks = text.match(/[^。！？.!?\n]+[。！？.!?\n]?/g) || [text];
-        const voice = findVoice(langCode);
-        let i = 0;
+        const res = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, lang: baseLang, voice }),
+          signal: controller.signal,
+        });
 
-        const next = () => {
-          if (i >= chunks.length) {
-            resolve();
-            return;
-          }
+        if (!res.ok) {
+          console.warn('TTS API error:', res.status);
+          return resolve();
+        }
 
-          const chunk = chunks[i].trim();
-          if (!chunk) { i++; next(); return; }
-
-          const u = new SpeechSynthesisUtterance(chunk);
-          u.rate = 1.0; u.lang = langCode;
-          if (voice) { u.voice = voice; u.lang = voice.lang; }
-
-          const keepAlive = setInterval(() => { if (window.speechSynthesis.speaking) { window.speechSynthesis.pause(); window.speechSynthesis.resume(); } }, 5000);
-          const timeout = setTimeout(() => { clearInterval(keepAlive); window.speechSynthesis.cancel(); resolve(); }, 30000);
-
-          u.onend = () => { clearInterval(keepAlive); clearTimeout(timeout); window.ttsEndTime = Date.now(); i++; next(); };
-          u.onerror = () => { clearInterval(keepAlive); clearTimeout(timeout); window.ttsEndTime = Date.now(); i++; next(); };
-
-          window.speechSynthesis.speak(u);
-        };
-        next();
-      });
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+        audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+        audio.play().catch(() => resolve());
+      } catch (err) {
+        if (err.name !== 'AbortError') console.warn('TTS error:', err);
+        resolve();
+      }
     });
-  };
+  }, []);
 
   // Translation hook (Standard mode)
   const { isTranslating, queueTranslation, flush } = useTranslation();
@@ -243,9 +218,7 @@ export default function HomePage() {
     setTargetBlocks(sourceBlocks);
 
     // Dừng đọc âm thanh hiện tại để tránh đọc lộn ngôn ngữ
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
+    if (ttsAbortRef.current) ttsAbortRef.current.abort();
   };
 
   if (!mounted || !authChecked) return null;
