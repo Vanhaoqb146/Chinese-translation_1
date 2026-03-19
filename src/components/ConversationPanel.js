@@ -67,6 +67,7 @@ export default function ConversationPanel({
   const [srcVoice, setSrcVoice] = useState(() => (VOICE_OPTIONS[srcLang.translateCode]?.[0]?.id || ''));
   const [tgtVoice, setTgtVoice] = useState(() => (VOICE_OPTIONS[tgtLang.translateCode]?.[0]?.id || ''));
   const [autoDetect, setAutoDetect] = useState(false);
+  const [holdMode, setHoldMode] = useState(false);
   const logBodyRef = useRef(null);
 
   const handleInterimText = useCallback((text) => setInterimText(text), []);
@@ -109,6 +110,7 @@ export default function ConversationPanel({
     engine,
     silenceMs: silenceSeconds * 1000,
     autoDetect,
+    holdMode,
     onInterimText: handleInterimText,
     onFinalResult: handleFinalResult,
     onStatusChange: handleStatusChange,
@@ -116,13 +118,26 @@ export default function ConversationPanel({
     getVoiceForLang,
   });
 
-  // Bấm nút ngôn ngữ → start(lang)
+  // Bấm nút ngôn ngữ → start(lang) (click mode)
   const handleStartLang = useCallback((lang) => {
     if (conv.isListening) {
       conv.stop();
     } else {
       conv.start(lang);
     }
+  }, [conv]);
+
+  // Hold mode: nhấn giữ → bắt đầu nghe
+  const handleHoldStart = useCallback((lang) => {
+    const busy = convStatus === 'translating' || convStatus === 'speaking' || convStatus === 'connecting';
+    if (busy || conv.isListening) return;
+    conv.start(lang);
+  }, [conv, convStatus]);
+
+  // Hold mode: thả tay → dừng + dịch
+  const handleHoldEnd = useCallback(() => {
+    if (!conv.isListening) return;
+    conv.stopHold();
   }, [conv]);
 
   const handleClearHistory = useCallback(() => {
@@ -142,6 +157,23 @@ export default function ConversationPanel({
   };
 
   const isBusy = convStatus === 'translating' || convStatus === 'speaking' || convStatus === 'connecting';
+
+  // Helper: tạo pointer event handlers cho hold mode
+  const holdProps = (lang) => ({
+    onPointerDown: (e) => {
+      e.preventDefault();
+      handleHoldStart(lang);
+    },
+    onPointerUp: (e) => {
+      e.preventDefault();
+      handleHoldEnd();
+    },
+    onPointerLeave: (e) => {
+      e.preventDefault();
+      handleHoldEnd();
+    },
+    onContextMenu: (e) => e.preventDefault(),
+  });
 
   return (
     <div className="conv-auto">
@@ -288,16 +320,18 @@ export default function ConversationPanel({
             <>
               <div className="ptt-group">
                 <button
-                  className={`ptt-btn ${conv.isListening ? 'recording' : ''}`}
+                  className={`ptt-btn ${conv.isListening ? (holdMode ? 'holding' : 'recording') : ''}`}
                   disabled={isBusy}
-                  onClick={() => handleStartLang(srcLang.translateCode)}
-                  onContextMenu={(e) => e.preventDefault()}
+                  {...(holdMode ? holdProps(srcLang.translateCode) : {
+                    onClick: () => handleStartLang(srcLang.translateCode),
+                    onContextMenu: (e) => e.preventDefault(),
+                  })}
                 >
                   <span className="ptt-btn-icon">
                     {convStatus === 'speaking' ? '🔊' :
                      convStatus === 'translating' ? '⏳' :
                      convStatus === 'connecting' ? '⏳' :
-                     conv.isListening ? '⏹' : '🎤'}
+                     conv.isListening ? (holdMode ? '🎙' : '⏹') : '🎤'}
                   </span>
                   {conv.isListening && convStatus === 'listening' && <span className="pulse-ring" />}
                   {conv.isListening && convStatus === 'listening' && <span className="pulse-ring p2" />}
@@ -309,10 +343,10 @@ export default function ConversationPanel({
 
               {/* Trạng thái */}
               <div className="ptt-hint">
-                {convStatus === 'idle' && '👆 Bấm để bắt đầu'}
+                {convStatus === 'idle' && (holdMode ? '👇 Nhấn giữ để nói' : '👆 Bấm để bắt đầu')}
                 {convStatus === 'connecting' && '⏳ Đang kết nối...'}
                 {convStatus === 'listening' && (
-                  <span>🟢 Đang nghe... {conv.activeLang ? getFlagForLang(conv.activeLang) : ''}</span>
+                  <span>{holdMode ? '🎙 Đang nghe... thả tay để dịch' : '🟢 Đang nghe...'} {conv.activeLang ? getFlagForLang(conv.activeLang) : ''}</span>
                 )}
                 {convStatus === 'translating' && '⏳ Đang dịch...'}
                 {convStatus === 'speaking' && '🔊 Đang phát...'}
@@ -324,15 +358,17 @@ export default function ConversationPanel({
               {/* Nút ngôn ngữ nguồn */}
               <div className="ptt-group">
                 <button
-                  className={`ptt-btn ${conv.activeLang === srcLang.translateCode ? 'recording' : ''}`}
+                  className={`ptt-btn ${conv.activeLang === srcLang.translateCode ? (holdMode ? 'holding' : 'recording') : ''}`}
                   disabled={isBusy || (conv.isListening && conv.activeLang !== srcLang.translateCode)}
-                  onClick={() => handleStartLang(srcLang.translateCode)}
-                  onContextMenu={(e) => e.preventDefault()}
+                  {...(holdMode ? holdProps(srcLang.translateCode) : {
+                    onClick: () => handleStartLang(srcLang.translateCode),
+                    onContextMenu: (e) => e.preventDefault(),
+                  })}
                 >
                   <span className="ptt-btn-icon">
                     {conv.activeLang === srcLang.translateCode && convStatus === 'speaking' ? '🔊' :
                      conv.activeLang === srcLang.translateCode && convStatus === 'translating' ? '⏳' :
-                     conv.activeLang === srcLang.translateCode ? '⏹' : '🎤'}
+                     conv.activeLang === srcLang.translateCode ? (holdMode ? '🎙' : '⏹') : '🎤'}
                   </span>
                   {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
                   {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
@@ -342,9 +378,9 @@ export default function ConversationPanel({
 
               {/* Trạng thái ở giữa */}
               <div className="ptt-hint">
-                {convStatus === 'idle' && '👆 Chọn ngôn ngữ'}
+                {convStatus === 'idle' && (holdMode ? '👇 Nhấn giữ để nói' : '👆 Chọn ngôn ngữ')}
                 {convStatus === 'connecting' && '⏳ Đang kết nối...'}
-                {convStatus === 'listening' && '🟢 Đang nghe...'}
+                {convStatus === 'listening' && (holdMode ? '🎙 Thả tay để dịch...' : '🟢 Đang nghe...')}
                 {convStatus === 'translating' && '⏳ Đang dịch...'}
                 {convStatus === 'speaking' && '🔊 Đang phát...'}
               </div>
@@ -352,15 +388,17 @@ export default function ConversationPanel({
               {/* Nút ngôn ngữ đích */}
               <div className="ptt-group">
                 <button
-                  className={`ptt-btn ${conv.activeLang === tgtLang.translateCode ? 'recording' : ''}`}
+                  className={`ptt-btn ${conv.activeLang === tgtLang.translateCode ? (holdMode ? 'holding' : 'recording') : ''}`}
                   disabled={isBusy || (conv.isListening && conv.activeLang !== tgtLang.translateCode)}
-                  onClick={() => handleStartLang(tgtLang.translateCode)}
-                  onContextMenu={(e) => e.preventDefault()}
+                  {...(holdMode ? holdProps(tgtLang.translateCode) : {
+                    onClick: () => handleStartLang(tgtLang.translateCode),
+                    onContextMenu: (e) => e.preventDefault(),
+                  })}
                 >
                   <span className="ptt-btn-icon">
                     {conv.activeLang === tgtLang.translateCode && convStatus === 'speaking' ? '🔊' :
                      conv.activeLang === tgtLang.translateCode && convStatus === 'translating' ? '⏳' :
-                     conv.activeLang === tgtLang.translateCode ? '⏹' : '🎤'}
+                     conv.activeLang === tgtLang.translateCode ? (holdMode ? '🎙' : '⏹') : '🎤'}
                   </span>
                   {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
                   {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
@@ -410,24 +448,53 @@ export default function ConversationPanel({
 
           <div style={{ width: 1, height: 20, background: 'rgba(14,165,233,0.2)' }} />
 
-          {/* Silence slider */}
-          <span style={{ fontSize: '13px', whiteSpace: 'nowrap', color: '#4b5563', fontWeight: 500 }}>
-            🕐 Dịch sau
-          </span>
-          <input
-            type="range"
-            min={2} max={10} step={1}
-            value={silenceSeconds}
-            onChange={(e) => setSilenceSeconds(Number(e.target.value))}
-            disabled={conv.isListening}
-            style={{ flex: 1, minWidth: 60, accentColor: '#0ea5e9', cursor: conv.isListening ? 'not-allowed' : 'pointer' }}
-          />
-          <span style={{
-            fontSize: '13px', fontWeight: 700, color: '#0ea5e9',
-            minWidth: 30, textAlign: 'center',
-          }}>
-            {silenceSeconds}s
-          </span>
+          {/* Toggle nhấn giữ mic */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: conv.isListening ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#4b5563', fontWeight: 500, whiteSpace: 'nowrap' }}>
+            <div
+              onClick={() => !conv.isListening && setHoldMode(!holdMode)}
+              style={{
+                width: 36, height: 20, borderRadius: 10,
+                background: holdMode ? '#10b981' : '#d1d5db',
+                position: 'relative', transition: 'background 0.2s',
+                cursor: conv.isListening ? 'not-allowed' : 'pointer',
+                opacity: conv.isListening ? 0.5 : 1,
+              }}
+            >
+              <div style={{
+                width: 16, height: 16, borderRadius: '50%',
+                background: 'white', position: 'absolute',
+                top: 2, left: holdMode ? 18 : 2,
+                transition: 'left 0.2s',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+              }} />
+            </div>
+            ✋ Nhấn giữ
+          </label>
+
+          {/* Silence slider — chỉ hiện khi KHÔNG bật holdMode */}
+          {!holdMode && (
+            <>
+              <div style={{ width: 1, height: 20, background: 'rgba(14,165,233,0.2)' }} />
+
+              <span style={{ fontSize: '13px', whiteSpace: 'nowrap', color: '#4b5563', fontWeight: 500 }}>
+                🕐 Dịch sau
+              </span>
+              <input
+                type="range"
+                min={2} max={10} step={1}
+                value={silenceSeconds}
+                onChange={(e) => setSilenceSeconds(Number(e.target.value))}
+                disabled={conv.isListening}
+                style={{ flex: 1, minWidth: 60, accentColor: '#0ea5e9', cursor: conv.isListening ? 'not-allowed' : 'pointer' }}
+              />
+              <span style={{
+                fontSize: '13px', fontWeight: 700, color: '#0ea5e9',
+                minWidth: 30, textAlign: 'center',
+              }}>
+                {silenceSeconds}s
+              </span>
+            </>
+          )}
         </div>
       </div>
     </div>

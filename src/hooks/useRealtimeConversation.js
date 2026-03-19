@@ -40,6 +40,7 @@ export default function useRealtimeConversation({
   engine = 'openai',
   silenceMs = 4000,
   autoDetect = false,
+  holdMode = false,
   onInterimText,
   onFinalResult,
   onStatusChange,
@@ -76,6 +77,7 @@ export default function useRealtimeConversation({
   const silenceMsRef = useRef(silenceMs);
   const getVoiceForLangRef = useRef(getVoiceForLang);
   const autoDetectRef = useRef(autoDetect);
+  const holdModeRef = useRef(holdMode);
 
   useEffect(() => {
     srcLangCodeRef.current = srcLangCode;
@@ -88,6 +90,7 @@ export default function useRealtimeConversation({
     silenceMsRef.current = silenceMs;
     getVoiceForLangRef.current = getVoiceForLang;
     autoDetectRef.current = autoDetect;
+    holdModeRef.current = holdMode;
   });
 
   // ====== Tạo recognizer mới (có thể gọi lại nhiều lần) ======
@@ -235,6 +238,8 @@ export default function useRealtimeConversation({
   const resetSilenceTimer = useCallback(() => {
     clearTimeout(silenceTimeoutRef.current);
     if (isSpeakingRef.current) return;
+    // Hold mode: không dùng silence timer — chỉ dịch khi user thả tay
+    if (holdModeRef.current) return;
 
     const timeout = silenceMsRef.current || 4000;
     silenceTimeoutRef.current = setTimeout(() => {
@@ -407,9 +412,18 @@ export default function useRealtimeConversation({
     isSpeakingRef.current = false;
     if (onInterimTextRef.current) onInterimTextRef.current('');
 
+    // Hold mode: luôn tắt mic sau TTS — user phải nhấn giữ lại
+    if (holdModeRef.current) {
+      console.log('🛑 [Hold mode] TTS xong → tắt mic, chờ user nhấn giữ lần nữa');
+      wantListeningRef.current = false;
+      clearInterval(elapsedTimerRef.current);
+      setIsListening(false);
+      setActiveLang(null);
+      if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
+    }
     // Chế độ tự nhận dạng (1 mic): mở mic lại để nghe tiếp
     // Chế độ thủ công (2 mic): tắt mic sau TTS — user bấm lại để nói tiếp
-    if (autoDetectRef.current && wantListeningRef.current) {
+    else if (autoDetectRef.current && wantListeningRef.current) {
       // Auto-detect: tạo recognizer mới để tiếp tục nghe
       try {
         console.log('🔄 [Auto-detect Resume] Tạo recognizer mới...');
@@ -495,6 +509,35 @@ export default function useRealtimeConversation({
     }
   }, [triggerTranslation]);
 
+  // ====== StopHold — dành cho chế độ nhấn giữ mic ======
+  const stopHold = useCallback(async () => {
+    console.log('🛑 [Hold] User thả tay → dừng mic + dịch');
+    clearTimeout(silenceTimeoutRef.current);
+
+    // Đóng recognizer ngay
+    if (recognizerRef.current) {
+      try {
+        await recognizerRef.current.stopContinuousRecognitionAsync();
+        recognizerRef.current.close();
+      } catch (e) { console.warn('⚠️ [StopHold close]', e); }
+      recognizerRef.current = null;
+    }
+
+    // Nếu có text → dịch ngay
+    const hasText = accumulatedTextRef.current.trim() || currentInterimRef.current.trim();
+    if (hasText && !isSpeakingRef.current) {
+      console.log('🛑 [Hold] Có text → trigger dịch!');
+      triggerTranslation();
+    } else {
+      // Không có text → về idle
+      wantListeningRef.current = false;
+      clearInterval(elapsedTimerRef.current);
+      setIsListening(false);
+      setActiveLang(null);
+      if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
+    }
+  }, [triggerTranslation]);
+
   useEffect(() => {
     return () => {
       wantListeningRef.current = false;
@@ -507,5 +550,5 @@ export default function useRealtimeConversation({
     };
   }, []);
 
-  return { isListening, elapsed, activeLang, start, stop };
+  return { isListening, elapsed, activeLang, start, stop, stopHold };
 }
