@@ -138,7 +138,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
 .conv-auto-timer { font-family: monospace; font-size: 22px; font-weight: 700; color: var(--accent2); letter-spacing: 2px; }
 
 /* Conversation Chat Log */
-.conv-log { background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg); display: flex; flex-direction: column; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 10px 30px rgba(0,0,0,0.03); }
+.conv-log { background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg); display: flex; flex-direction: column; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 10px 30px rgba(0,0,0,0.03); flex: 1; min-height: 0; overflow: hidden; }
 .conv-bottom-controls { flex-shrink: 0; padding-top: 10px; border-top: 1px solid var(--border); margin-top: 8px; }
 
 /* Voice Selector */
@@ -163,7 +163,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
 .voice-selector-select:disabled { opacity: 0.5; cursor: not-allowed; }
 .voice-selector-select option { background: white; color: var(--text); }
 .conv-log-header { padding: 12px 15px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-weight: 600; color: var(--text); background: rgba(0,0,0,0.01); }
-.conv-log-body { padding: 15px; display: flex; flex-direction: column; gap: 12px; }
+.conv-log-body { padding: 15px; display: flex; flex-direction: column; gap: 12px; flex: 1; overflow-y: auto; }
 .conv-empty { margin: auto; display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--muted); text-align: center; }
 .conv-empty-icon { font-size: 40px; opacity: 0.5; }
 .conv-empty-sub { font-size: 13px; max-width: 220px; }

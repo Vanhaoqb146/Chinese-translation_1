@@ -70,7 +70,13 @@ export default function ConversationPanel({
   const [holdMode, setHoldMode] = useState(false);
   const logBodyRef = useRef(null);
 
-  const handleInterimText = useCallback((text) => setInterimText(text), []);
+  const handleInterimText = useCallback((text) => {
+    setInterimText(text);
+    // Auto-scroll để user thấy text mới nhất
+    setTimeout(() => {
+      if (logBodyRef.current) logBodyRef.current.scrollTop = logBodyRef.current.scrollHeight;
+    }, 30);
+  }, []);
 
   const handleFinalResult = useCallback(({ originalText, translatedText, fromLang, toLang, id }) => {
     setHistory(prev => [{
@@ -284,27 +290,26 @@ export default function ConversationPanel({
               </div>
             );
           })}
+          {/* ===== STT PREVIEW (bên trong conv-log để không đẩy nút mic) ===== */}
+          {interimText && (
+            <div style={{
+              margin: '0 0 8px',
+              padding: '12px 16px',
+              background: 'rgba(14, 165, 233, 0.05)',
+              borderRadius: '12px',
+              border: '1px dashed rgba(14, 165, 233, 0.3)',
+            }}>
+              <div style={{ fontSize: '14px', color: '#4b5563', lineHeight: 1.5 }}>
+                <span style={{ fontSize: '11px', opacity: 0.6, marginRight: 6 }}>
+                  {conv.activeLang ? getFlagForLang(conv.activeLang) : '🎤'}
+                </span>
+                {interimText}
+                <span style={{ display: 'inline-block', width: 2, height: 16, background: '#0ea5e9', marginLeft: 2, animation: 'blink 1s infinite' }} />
+              </div>
+            </div>
+          )}
         </div>
       </div>
-
-      {/* ===== STT PREVIEW ===== */}
-      {interimText && (
-        <div style={{
-          margin: '0 16px 8px',
-          padding: '12px 16px',
-          background: 'rgba(14, 165, 233, 0.05)',
-          borderRadius: '12px',
-          border: '1px dashed rgba(14, 165, 233, 0.3)',
-        }}>
-          <div style={{ fontSize: '14px', color: '#4b5563', lineHeight: 1.5 }}>
-            <span style={{ fontSize: '11px', opacity: 0.6, marginRight: 6 }}>
-              {conv.activeLang ? getFlagForLang(conv.activeLang) : '🎤'}
-            </span>
-            {interimText}
-            <span style={{ display: 'inline-block', width: 2, height: 16, background: '#0ea5e9', marginLeft: 2, animation: 'blink 1s infinite' }} />
-          </div>
-        </div>
-      )}
 
       {/* ===== PHẦN ĐIỀU KHIỂN (DƯỚI CÙNG) ===== */}
       <div className="conv-bottom-controls">
