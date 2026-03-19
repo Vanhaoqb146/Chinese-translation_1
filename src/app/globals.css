@@ -42,7 +42,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
 .container { max-width: 1100px; margin: 0 auto; padding: 20px 16px 40px; }
 
 /* ============== HEADER ============== */
-.header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-shrink: 0; }
 .logo { display: flex; align-items: center; gap: 10px; }
 .logo-icon { width: 42px; height: 42px; background: var(--gradient); border-radius: var(--r-md); display: flex; align-items: center; justify-content: center; font-size: 20px; box-shadow: 0 0 20px var(--glow); }
 .logo h1 { font-size: 22px; font-weight: 800; background: var(--gradient); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
@@ -121,7 +121,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
 
 /* ============== CONVERSATION MODE ============== */
 .container-conv { display: flex; flex-direction: column; height: calc(100vh - 40px); padding-bottom: 20px; }
-.conv-auto { display: flex; flex-direction: column; flex: 1; max-width: 600px; width: 100%; margin: 0 auto; }
+.conv-auto { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; max-width: 600px; width: 100%; margin: 0 auto; }
 
 .conv-auto-btn-area { background: var(--card); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 30px 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 15px; position: relative; overflow: hidden; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); box-shadow: 0 10px 30px rgba(0,0,0,0.03); }
 .conv-auto-btn { position: relative; width: 80px; height: 80px; border-radius: 50%; border: none; cursor: pointer; background: transparent; padding: 0; outline: none; z-index: 2; }
@@ -148,6 +148,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
   background: var(--card); border: 1px solid var(--border);
   border-radius: var(--r-md);
   backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  flex-shrink: 0;
 }
 .voice-selector-label { font-size: 12px; font-weight: 600; color: var(--text2); white-space: nowrap; }
 .voice-selector-group { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
@@ -185,8 +186,8 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  gap: 20px;
-  padding: 16px 20px;
+  gap: 16px;
+  padding: 12px 16px;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
@@ -199,23 +200,23 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  min-width: 100px;
+  gap: 6px;
+  min-width: 80px;
 }
 
 .ptt-btn {
   position: relative;
-  width: 80px;
-  height: 80px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
-  border: 4px solid white;
+  border: 3px solid white;
   background: var(--gradient);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s ease;
-  box-shadow: 0 10px 25px var(--glow);
+  box-shadow: 0 8px 20px var(--glow);
   outline: none;
   z-index: 2;
   /* [PRO-TIP] Chặn menu long-press & kính lúp trên mobile */
@@ -281,14 +282,14 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
 }
 
 .ptt-btn-icon {
-  font-size: 28px;
+  font-size: 22px;
   color: white;
   z-index: 2;
   position: relative;
 }
 
 .ptt-label {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text);
   text-align: center;
@@ -307,12 +308,12 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; overflow-x:
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text2);
   text-align: center;
-  min-width: 120px;
-  padding-top: 25px;
+  min-width: 100px;
+  padding-top: 20px;
 }
 
 .ptt-auto-detect-label {
