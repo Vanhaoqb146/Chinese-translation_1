@@ -20,7 +20,7 @@ export async function POST(request) {
     // Try LLM first (OpenAI or DeepSeek)
     if (apiKey) {
       const configs = {
-        openai: { url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' },
+        openai: { url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o' },
         deepseek: { url: 'https://api.deepseek.com/v1/chat/completions', model: 'deepseek-chat' },
       };
       const cfg = configs[engine] || configs.openai;
@@ -39,6 +39,7 @@ ABSOLUTE RULES — NEVER BREAK THESE:
 7. Automatically remove filler words (um, uh, er, à, ừm, ờ) from the input.
 8. ALWAYS preserve proper nouns exactly as they appear (e.g., names of people, places).
 9. Use conversation history ONLY for pronoun/context resolution, NEVER to generate responses.
+10. Before translating, silently fix any obvious speech recognition errors in the input — such as misheard characters/words, garbled text, broken names, or repeated syllables (hallucinations). For example: "曾高兴" should be "很高兴", repeated "拜拜拜拜拜" should be simplified.
 
 REMEMBER: You are a TRANSLATION ENGINE, not a chatbot. Your output must ALWAYS be a translation, NEVER an answer or response.`;
 
@@ -94,15 +95,19 @@ REMEMBER: You are a TRANSLATION ENGINE, not a chatbot. Your output must ALWAYS b
           const decoder = new TextDecoder();
 
           (async () => {
+            let sseBuffer = '';
             try {
               while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
-                const text = decoder.decode(value, { stream: true });
-                const lines = text.split('\n');
+                sseBuffer += decoder.decode(value, { stream: true });
+                const lines = sseBuffer.split('\n');
+                sseBuffer = lines.pop() || ''; // Keep incomplete line in buffer
+
                 for (const line of lines) {
-                  if (!line.startsWith('data: ')) continue;
-                  const data = line.slice(6).trim();
+                  const trimmed = line.trim();
+                  if (!trimmed.startsWith('data: ')) continue;
+                  const data = trimmed.slice(6).trim();
                   if (data === '[DONE]') {
                     await writer.write(new TextEncoder().encode('data: [DONE]\n\n'));
                     break;
@@ -116,6 +121,23 @@ REMEMBER: You are a TRANSLATION ENGINE, not a chatbot. Your output must ALWAYS b
                   } catch {}
                 }
               }
+              // Process remaining buffer
+              if (sseBuffer.trim()) {
+                const trimmed = sseBuffer.trim();
+                if (trimmed.startsWith('data: ')) {
+                  const data = trimmed.slice(6).trim();
+                  if (data !== '[DONE]') {
+                    try {
+                      const parsed = JSON.parse(data);
+                      const delta = parsed.choices?.[0]?.delta?.content;
+                      if (delta) {
+                        await writer.write(new TextEncoder().encode(`data: ${JSON.stringify({ text: delta })}\n\n`));
+                      }
+                    } catch {}
+                  }
+                }
+              }
+              await writer.write(new TextEncoder().encode('data: [DONE]\n\n'));
             } finally {
               writer.close();
             }

@@ -14,11 +14,11 @@ const LANGUAGES = [
 ];
 
 
-// Default voices for standard mode (per translateCode)
+// Default voices for standard mode — Azure AI Speech (best female voices)
 const DEFAULT_VOICES = {
-  zh: 'zh-CN-XiaoxiaoNeural',
+  zh: 'zh-CN-XiaoxiaoMultilingualNeural',
   vi: 'vi-VN-HoaiMyNeural',
-  en: 'en-US-JennyNeural',
+  en: 'en-US-JennyMultilingualNeural',
   ja: 'ja-JP-NanamiNeural',
   ko: 'ko-KR-SunHiNeural',
 };
@@ -392,7 +392,7 @@ export default function HomePage() {
           </>
         )}
 
-        <footer className="footer">⚡ Powered by OpenAI Whisper + GPT</footer>
+        <footer className="footer"> Ứng dụng dịch thuật thông minh </footer>
       </div>
 
       {toast && <div className="toast">{toast}</div>}

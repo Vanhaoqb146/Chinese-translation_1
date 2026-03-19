@@ -9,7 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "msedge-tts": "^2.0.4",
+    "microsoft-cognitiveservices-speech-sdk": "^1.48.0",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3"

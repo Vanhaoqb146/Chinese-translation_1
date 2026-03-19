@@ -2,36 +2,45 @@
 import { useState, useRef, useCallback } from 'react';
 import useRealtimeConversation from '@/hooks/useRealtimeConversation';
 
-// Voice options per language (verified via Edge TTS getVoices)
+// Voice options per language — Azure AI Speech (sorted best quality first)
 const VOICE_OPTIONS = {
   vi: [
-    { id: 'vi-VN-HoaiMyNeural', label: 'Nữ miền Bắc' },
-    { id: 'vi-VN-NamMinhNeural', label: 'Nam miền Bắc' },
+    { id: 'vi-VN-HoaiMyNeural', label: '⭐ Nữ miền Bắc (HoaiMy)' },
+    { id: 'vi-VN-NamMinhNeural', label: '⭐ Nam miền Bắc (NamMinh)' },
+    { id: 'vi-VN-ThuDuongNeural', label: 'Nữ miền Nam (ThuDuong)' },
+    { id: 'vi-VN-QuangNeural', label: 'Nam miền Nam (Quang)' },
   ],
   zh: [
-    { id: 'zh-CN-XiaoxiaoNeural', label: 'Nữ Phổ thông' },
-    { id: 'zh-CN-YunjianNeural', label: 'Nam Phổ thông' },
-    { id: 'zh-CN-YunxiNeural', label: 'Nam Thanh niên' },
-    { id: 'zh-CN-XiaoyiNeural', label: 'Nữ Thanh niên' },
-    { id: 'zh-CN-YunyangNeural', label: 'Nam MC tin tức' },
+    { id: 'zh-CN-XiaoxiaoMultilingualNeural', label: '⭐ Nữ Đa ngữ (Xiaoxiao)' },
+    { id: 'zh-CN-YunyiMultilingualNeural', label: '⭐ Nam Đa ngữ (Yunyi)' },
+    { id: 'zh-CN-XiaoxiaoNeural', label: 'Nữ Phổ thông (Xiaoxiao)' },
+    { id: 'zh-CN-YunjianNeural', label: 'Nam Phổ thông (Yunjian)' },
+    { id: 'zh-CN-XiaochenNeural', label: 'Nữ Tự nhiên (Xiaochen)' },
+    { id: 'zh-CN-YunxiNeural', label: 'Nam Thanh niên (Yunxi)' },
+    { id: 'zh-CN-XiaoyiNeural', label: 'Nữ Thanh niên (Xiaoyi)' },
+    { id: 'zh-CN-YunyangNeural', label: 'Nam MC tin tức (Yunyang)' },
+    { id: 'zh-CN-XiaochenMultilingualNeural', label: 'Nữ Đa ngữ (Xiaochen)' },
     { id: 'zh-CN-liaoning-XiaobeiNeural', label: 'Nữ Đông Bắc' },
     { id: 'zh-CN-shaanxi-XiaoniNeural', label: 'Nữ Thiểm Tây' },
     { id: 'zh-HK-HiuGaaiNeural', label: 'Nữ Quảng Đông' },
+    { id: 'zh-HK-WanLungNeural', label: 'Nam Quảng Đông' },
     { id: 'zh-TW-HsiaoChenNeural', label: 'Nữ Đài Loan' },
+    { id: 'zh-TW-YunJheNeural', label: 'Nam Đài Loan' },
   ],
   en: [
-    { id: 'en-US-JennyNeural', label: 'Nữ Mỹ' },
-    { id: 'en-US-GuyNeural', label: 'Nam Mỹ' },
+    { id: 'en-US-JennyMultilingualNeural', label: '⭐ Nữ Đa ngữ (Jenny)' },
+    { id: 'en-US-RyanMultilingualNeural', label: '⭐ Nam Đa ngữ (Ryan)' },
     { id: 'en-US-AriaNeural', label: 'Nữ Aria' },
+    { id: 'en-US-GuyNeural', label: 'Nam Guy' },
     { id: 'en-US-BrianNeural', label: 'Nam Brian' },
   ],
   ja: [
-    { id: 'ja-JP-NanamiNeural', label: 'Nữ Nhật' },
-    { id: 'ja-JP-KeitaNeural', label: 'Nam Nhật' },
+    { id: 'ja-JP-NanamiNeural', label: 'Nữ Nhật (Nanami)' },
+    { id: 'ja-JP-KeitaNeural', label: 'Nam Nhật (Keita)' },
   ],
   ko: [
-    { id: 'ko-KR-SunHiNeural', label: 'Nữ Hàn' },
-    { id: 'ko-KR-InJoonNeural', label: 'Nam Hàn' },
+    { id: 'ko-KR-SunHiNeural', label: 'Nữ Hàn (SunHi)' },
+    { id: 'ko-KR-InJoonNeural', label: 'Nam Hàn (InJoon)' },
   ],
 };
 
@@ -57,6 +66,7 @@ export default function ConversationPanel({
   const [silenceSeconds, setSilenceSeconds] = useState(4);
   const [srcVoice, setSrcVoice] = useState(() => (VOICE_OPTIONS[srcLang.translateCode]?.[0]?.id || ''));
   const [tgtVoice, setTgtVoice] = useState(() => (VOICE_OPTIONS[tgtLang.translateCode]?.[0]?.id || ''));
+  const [autoDetect, setAutoDetect] = useState(false);
   const logBodyRef = useRef(null);
 
   const handleInterimText = useCallback((text) => setInterimText(text), []);
@@ -98,6 +108,7 @@ export default function ConversationPanel({
     tgtLangCode: tgtLang.translateCode,
     engine,
     silenceMs: silenceSeconds * 1000,
+    autoDetect,
     onInterimText: handleInterimText,
     onFinalResult: handleFinalResult,
     onStatusChange: handleStatusChange,
@@ -130,7 +141,7 @@ export default function ConversationPanel({
     return lang ? lang.flag : '🌐';
   };
 
-  const isBusy = convStatus === 'translating' || convStatus === 'speaking';
+  const isBusy = convStatus === 'translating' || convStatus === 'speaking' || convStatus === 'connecting';
 
   return (
     <div className="conv-auto">
@@ -186,47 +197,58 @@ export default function ConversationPanel({
           {history.slice().reverse().map((h, index) => {
             const isSourceSpeaker = h.fromLang === srcLang.translateCode;
             const alignment = isSourceSpeaker ? 'flex-start' : 'flex-end';
-            const bubbleBg = isSourceSpeaker ? 'white' : 'linear-gradient(135deg, #0ea5e9, #06b6d4)';
-            const textColor = isSourceSpeaker ? '#1f2937' : 'white';
-            const borderColor = isSourceSpeaker ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.2)';
 
             return (
-              <div key={`msg-${h.id}-${index}`} style={{ display: 'flex', flexDirection: 'column', alignItems: alignment, marginBottom: '20px', width: '100%' }}>
+              <div key={`msg-${h.id}-${index}`} style={{ display: 'flex', flexDirection: 'column', alignItems: alignment, marginBottom: '16px', width: '100%' }}>
+                {/* Câu gốc */}
                 <div style={{
-                  background: bubbleBg,
-                  color: textColor,
-                  padding: '12px 16px',
-                  borderRadius: '16px',
-                  maxWidth: '85%',
-                  boxShadow: '0 4px 15px rgba(0,0,0,0.05)',
+                  background: 'white',
+                  color: '#1f2937',
+                  padding: '10px 14px',
+                  borderRadius: '14px 14px 4px 4px',
+                  maxWidth: '88%',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
                   display: 'flex',
-                  flexDirection: 'column',
-                  gap: '10px'
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                  borderLeft: isSourceSpeaker ? '3px solid #0ea5e9' : '3px solid #10b981',
                 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${borderColor}`, paddingBottom: '8px' }}>
-                    <span style={{ fontSize: '15px', fontWeight: '500', lineHeight: '1.4' }}>
-                      <span style={{ fontSize: '12px', opacity: 0.8, marginRight: '8px' }}>{getFlagForLang(h.fromLang)}</span>
-                      {h.source}
-                    </span>
-                    <button
-                      onClick={() => speak(h.source, findSttCode(h.fromLang))}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', opacity: 0.8, marginLeft: '12px', color: textColor }}
-                      title="Nghe lại câu gốc"
-                    >🔊</button>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '15px', lineHeight: '1.4' }}>
-                      <span style={{ fontSize: '12px', opacity: 0.8, marginRight: '8px' }}>{getFlagForLang(h.toLang)}</span>
-                      {h.target}
-                    </span>
-                    <button
-                      onClick={() => speak(h.target, findSttCode(h.toLang))}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px', opacity: 0.8, marginLeft: '12px', color: textColor }}
-                      title="Nghe lại bản dịch"
-                    >🔊</button>
-                  </div>
+                  <span style={{ fontSize: '15px', fontWeight: '600', lineHeight: '1.5' }}>
+                    <span style={{ fontSize: '13px', marginRight: '6px' }}>{getFlagForLang(h.fromLang)}</span>
+                    {h.source}
+                  </span>
+                  <button
+                    onClick={() => speak(h.source, findSttCode(h.fromLang))}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '15px', opacity: 0.6, flexShrink: 0 }}
+                    title="Nghe câu gốc"
+                  >🔊</button>
                 </div>
-                <span style={{ fontSize: '11px', opacity: 0.5, marginTop: '4px', padding: '0 8px' }}>{h.time}</span>
+                {/* Bản dịch */}
+                <div style={{
+                  background: isSourceSpeaker ? 'linear-gradient(135deg, #0ea5e9, #06b6d4)' : 'linear-gradient(135deg, #10b981, #059669)',
+                  color: 'white',
+                  padding: '10px 14px',
+                  borderRadius: '4px 4px 14px 14px',
+                  maxWidth: '88%',
+                  boxShadow: '0 4px 15px rgba(0,0,0,0.08)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                  marginTop: '2px',
+                }}>
+                  <span style={{ fontSize: '15px', lineHeight: '1.5' }}>
+                    <span style={{ fontSize: '13px', marginRight: '6px' }}>{getFlagForLang(h.toLang)}</span>
+                    {h.target}
+                  </span>
+                  <button
+                    onClick={() => speak(h.target, findSttCode(h.toLang))}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '15px', opacity: 0.8, color: 'white', flexShrink: 0 }}
+                    title="Nghe bản dịch"
+                  >🔊</button>
+                </div>
+                <span style={{ fontSize: '11px', opacity: 0.4, marginTop: '4px', padding: '0 8px' }}>{h.time}</span>
               </div>
             );
           })}
@@ -259,53 +281,94 @@ export default function ConversationPanel({
           ⚠️ Không nên thu âm quá 3 phút để dịch chính xác nhất!
         </div>
 
-        {/* 2 NÚT MIC */}
+        {/* NÚT MIC */}
         <div className="ptt-controls">
-          {/* Nút Tiếng Việt */}
-          <div className="ptt-group">
-            <button
-              className={`ptt-btn ${conv.activeLang === srcLang.translateCode ? 'recording' : ''}`}
-              disabled={isBusy || (conv.isListening && conv.activeLang !== srcLang.translateCode)}
-              onClick={() => handleStartLang(srcLang.translateCode)}
-              onContextMenu={(e) => e.preventDefault()}
-            >
-              <span className="ptt-btn-icon">
-                {conv.activeLang === srcLang.translateCode && convStatus === 'speaking' ? '🔊' :
-                 conv.activeLang === srcLang.translateCode && convStatus === 'translating' ? '⏳' :
-                 conv.activeLang === srcLang.translateCode ? '⏹' : '🎤'}
-              </span>
-              {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
-              {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
-            </button>
-            <div className="ptt-label">{srcLang.flag} {srcLang.name}</div>
-          </div>
+          {autoDetect ? (
+            /* === CHẾ ĐỘ TỰ NHẬN DẠNG: 1 NÚT MIC === */
+            <>
+              <div className="ptt-group">
+                <button
+                  className={`ptt-btn ${conv.isListening ? 'recording' : ''}`}
+                  disabled={isBusy}
+                  onClick={() => handleStartLang(srcLang.translateCode)}
+                  onContextMenu={(e) => e.preventDefault()}
+                >
+                  <span className="ptt-btn-icon">
+                    {convStatus === 'speaking' ? '🔊' :
+                     convStatus === 'translating' ? '⏳' :
+                     convStatus === 'connecting' ? '⏳' :
+                     conv.isListening ? '⏹' : '🎤'}
+                  </span>
+                  {conv.isListening && convStatus === 'listening' && <span className="pulse-ring" />}
+                  {conv.isListening && convStatus === 'listening' && <span className="pulse-ring p2" />}
+                </button>
+                <div className="ptt-label">
+                  {conv.activeLang ? getFlagForLang(conv.activeLang) : '🌐'} Tự nhận dạng
+                </div>
+              </div>
 
-          {/* Trạng thái ở giữa */}
-          <div className="ptt-hint">
-            {convStatus === 'idle' && '👆 Chọn ngôn ngữ'}
-            {convStatus === 'listening' && '🟢 Đang nghe...'}
-            {convStatus === 'translating' && '⏳ Đang dịch...'}
-            {convStatus === 'speaking' && '🔊 Đang phát...'}
-          </div>
+              {/* Trạng thái */}
+              <div className="ptt-hint">
+                {convStatus === 'idle' && '👆 Bấm để bắt đầu'}
+                {convStatus === 'connecting' && '⏳ Đang kết nối...'}
+                {convStatus === 'listening' && (
+                  <span>🟢 Đang nghe... {conv.activeLang ? getFlagForLang(conv.activeLang) : ''}</span>
+                )}
+                {convStatus === 'translating' && '⏳ Đang dịch...'}
+                {convStatus === 'speaking' && '🔊 Đang phát...'}
+              </div>
+            </>
+          ) : (
+            /* === CHẾ ĐỘ THỦ CÔNG: 2 NÚT MIC === */
+            <>
+              {/* Nút ngôn ngữ nguồn */}
+              <div className="ptt-group">
+                <button
+                  className={`ptt-btn ${conv.activeLang === srcLang.translateCode ? 'recording' : ''}`}
+                  disabled={isBusy || (conv.isListening && conv.activeLang !== srcLang.translateCode)}
+                  onClick={() => handleStartLang(srcLang.translateCode)}
+                  onContextMenu={(e) => e.preventDefault()}
+                >
+                  <span className="ptt-btn-icon">
+                    {conv.activeLang === srcLang.translateCode && convStatus === 'speaking' ? '🔊' :
+                     conv.activeLang === srcLang.translateCode && convStatus === 'translating' ? '⏳' :
+                     conv.activeLang === srcLang.translateCode ? '⏹' : '🎤'}
+                  </span>
+                  {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
+                  {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
+                </button>
+                <div className="ptt-label">{srcLang.flag} {srcLang.name}</div>
+              </div>
 
-          {/* Nút 中文 */}
-          <div className="ptt-group">
-            <button
-              className={`ptt-btn ${conv.activeLang === tgtLang.translateCode ? 'recording' : ''}`}
-              disabled={isBusy || (conv.isListening && conv.activeLang !== tgtLang.translateCode)}
-              onClick={() => handleStartLang(tgtLang.translateCode)}
-              onContextMenu={(e) => e.preventDefault()}
-            >
-              <span className="ptt-btn-icon">
-                {conv.activeLang === tgtLang.translateCode && convStatus === 'speaking' ? '🔊' :
-                 conv.activeLang === tgtLang.translateCode && convStatus === 'translating' ? '⏳' :
-                 conv.activeLang === tgtLang.translateCode ? '⏹' : '🎤'}
-              </span>
-              {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
-              {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
-            </button>
-            <div className="ptt-label">{tgtLang.flag} {tgtLang.name}</div>
-          </div>
+              {/* Trạng thái ở giữa */}
+              <div className="ptt-hint">
+                {convStatus === 'idle' && '👆 Chọn ngôn ngữ'}
+                {convStatus === 'connecting' && '⏳ Đang kết nối...'}
+                {convStatus === 'listening' && '🟢 Đang nghe...'}
+                {convStatus === 'translating' && '⏳ Đang dịch...'}
+                {convStatus === 'speaking' && '🔊 Đang phát...'}
+              </div>
+
+              {/* Nút ngôn ngữ đích */}
+              <div className="ptt-group">
+                <button
+                  className={`ptt-btn ${conv.activeLang === tgtLang.translateCode ? 'recording' : ''}`}
+                  disabled={isBusy || (conv.isListening && conv.activeLang !== tgtLang.translateCode)}
+                  onClick={() => handleStartLang(tgtLang.translateCode)}
+                  onContextMenu={(e) => e.preventDefault()}
+                >
+                  <span className="ptt-btn-icon">
+                    {conv.activeLang === tgtLang.translateCode && convStatus === 'speaking' ? '🔊' :
+                     conv.activeLang === tgtLang.translateCode && convStatus === 'translating' ? '⏳' :
+                     conv.activeLang === tgtLang.translateCode ? '⏹' : '🎤'}
+                  </span>
+                  {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
+                  {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
+                </button>
+                <div className="ptt-label">{tgtLang.flag} {tgtLang.name}</div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Timer + Info */}
@@ -315,15 +378,41 @@ export default function ConversationPanel({
           </div>
         )}
 
-        {/* CÀI ĐẶT THỜI GIAN IM LẶNG */}
+        {/* CÀI ĐẶT */}
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 10,
+          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
           margin: '0 16px 8px', padding: '8px 14px',
           background: 'rgba(14, 165, 233, 0.05)',
           borderRadius: 10, border: '1px solid rgba(14, 165, 233, 0.15)',
         }}>
+          {/* Toggle tự nhận dạng */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: conv.isListening ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#4b5563', fontWeight: 500, whiteSpace: 'nowrap' }}>
+            <div
+              onClick={() => !conv.isListening && setAutoDetect(!autoDetect)}
+              style={{
+                width: 36, height: 20, borderRadius: 10,
+                background: autoDetect ? '#0ea5e9' : '#d1d5db',
+                position: 'relative', transition: 'background 0.2s',
+                cursor: conv.isListening ? 'not-allowed' : 'pointer',
+                opacity: conv.isListening ? 0.5 : 1,
+              }}
+            >
+              <div style={{
+                width: 16, height: 16, borderRadius: '50%',
+                background: 'white', position: 'absolute',
+                top: 2, left: autoDetect ? 18 : 2,
+                transition: 'left 0.2s',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+              }} />
+            </div>
+            🌐 Tự nhận dạng
+          </label>
+
+          <div style={{ width: 1, height: 20, background: 'rgba(14,165,233,0.2)' }} />
+
+          {/* Silence slider */}
           <span style={{ fontSize: '13px', whiteSpace: 'nowrap', color: '#4b5563', fontWeight: 500 }}>
-            🌐 Dịch sau
+            🕐 Dịch sau
           </span>
           <input
             type="range"
@@ -331,11 +420,11 @@ export default function ConversationPanel({
             value={silenceSeconds}
             onChange={(e) => setSilenceSeconds(Number(e.target.value))}
             disabled={conv.isListening}
-            style={{ flex: 1, accentColor: '#0ea5e9', cursor: conv.isListening ? 'not-allowed' : 'pointer' }}
+            style={{ flex: 1, minWidth: 60, accentColor: '#0ea5e9', cursor: conv.isListening ? 'not-allowed' : 'pointer' }}
           />
           <span style={{
             fontSize: '13px', fontWeight: 700, color: '#0ea5e9',
-            minWidth: 40, textAlign: 'center',
+            minWidth: 30, textAlign: 'center',
           }}>
             {silenceSeconds}s
           </span>

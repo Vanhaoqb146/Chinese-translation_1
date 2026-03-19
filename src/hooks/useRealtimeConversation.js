@@ -2,13 +2,13 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 /**
- * useRealtimeConversation — 4 bước tối ưu (2 nút mic)
+ * useRealtimeConversation — Azure Speech STT + GPT-4o + Azure TTS
  *
- * start(inputLang) → mở WS với language=inputLang
- * BƯỚC 1: Deepgram STT (language cứng) → hiện text gốc
- * BƯỚC 2: 4s im lặng → trigger
+ * start(inputLang) → Azure SpeechRecognizer (continuous)
+ * BƯỚC 1: Azure STT → interim/final text + auto language detection
+ * BƯỚC 2: Silence timer → trigger translation
  * BƯỚC 3: Khóa mic → REST translate → hiện dịch → TTS
- * BƯỚC 4: TTS xong → dọn dẹp → mở mic → chu trình mới
+ * BƯỚC 4: TTS xong → resume recognition
  */
 
 export default function useRealtimeConversation({
@@ -16,6 +16,7 @@ export default function useRealtimeConversation({
   tgtLangCode,
   engine = 'openai',
   silenceMs = 4000,
+  autoDetect = false,
   onInterimText,
   onFinalResult,
   onStatusChange,
@@ -24,12 +25,9 @@ export default function useRealtimeConversation({
 }) {
   const [isListening, setIsListening] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  const [activeLang, setActiveLang] = useState(null); // Ngôn ngữ đang nghe
+  const [activeLang, setActiveLang] = useState(null);
 
-  const wsRef = useRef(null);
-  const streamRef = useRef(null);
-  const audioContextRef = useRef(null);
-  const processorRef = useRef(null);
+  const recognizerRef = useRef(null);
   const startTimeRef = useRef(0);
   const elapsedTimerRef = useRef(null);
 
@@ -54,6 +52,7 @@ export default function useRealtimeConversation({
   const engineRef = useRef(engine);
   const silenceMsRef = useRef(silenceMs);
   const getVoiceForLangRef = useRef(getVoiceForLang);
+  const autoDetectRef = useRef(autoDetect);
 
   useEffect(() => {
     srcLangCodeRef.current = srcLangCode;
@@ -65,6 +64,7 @@ export default function useRealtimeConversation({
     engineRef.current = engine;
     silenceMsRef.current = silenceMs;
     getVoiceForLangRef.current = getVoiceForLang;
+    autoDetectRef.current = autoDetect;
   });
 
   // ====== PIPELINE: Dịch + TTS (dùng chung cho silence timer & manual stop) ======
@@ -87,7 +87,13 @@ export default function useRealtimeConversation({
     isSpeakingRef.current = true;
     if (onStatusChangeRef.current) onStatusChangeRef.current('translating');
 
+    // Pause recognition while translating/speaking
+    if (recognizerRef.current && wantListeningRef.current) {
+      try { await recognizerRef.current.stopContinuousRecognitionAsync(); } catch { }
+    }
+
     try {
+      // ====== STREAMING TRANSLATION ======
       const translateRes = await fetch('/api/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -97,12 +103,56 @@ export default function useRealtimeConversation({
           targetLang: toLang,
           engine: engineRef.current,
           history: conversationHistoryRef.current,
+          stream: true,
         }),
         signal: AbortSignal.timeout(25000),
       });
 
       if (!translateRes.ok) throw new Error(`Translate error ${translateRes.status}`);
-      const { translation: translatedText } = await translateRes.json();
+
+      // Parse SSE stream
+      const reader = translateRes.body.getReader();
+      const decoder = new TextDecoder();
+      let translatedText = '';
+      let buffer = '';
+      let streamDone = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+          const data = trimmed.slice(6).trim();
+          if (data === '[DONE]') { streamDone = true; break; }
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.text) translatedText += parsed.text;
+          } catch { }
+        }
+        if (streamDone) break;
+      }
+
+      // Process remaining buffer
+      if (buffer.trim()) {
+        const remainingLines = buffer.split('\n');
+        for (const line of remainingLines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+          const data = trimmed.slice(6).trim();
+          if (data === '[DONE]') break;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.text) translatedText += parsed.text;
+          } catch { }
+        }
+      }
+
+      translatedText = translatedText.trim();
       if (!translatedText) throw new Error('Empty translation');
 
       console.log(`✅ [Translate] "${translatedText.slice(0, 60)}..."`);
@@ -120,74 +170,57 @@ export default function useRealtimeConversation({
         conversationHistoryRef.current = conversationHistoryRef.current.slice(-8);
       }
 
-      // TTS
+      // ====== TTS ======
       if (onStatusChangeRef.current) onStatusChangeRef.current('speaking');
 
-      const sendKeepAlive = () => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ type: 'KeepAlive' }));
-        }
-      };
-      sendKeepAlive();
-      const keepAlive = setInterval(sendKeepAlive, 5000);
+      const voiceId = getVoiceForLangRef.current ? getVoiceForLangRef.current(toLang) : null;
+      const ttsRes = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: translatedText, lang: toLang, voice: voiceId }),
+        signal: AbortSignal.timeout(30000),
+      });
 
-      try {
-        const t0 = performance.now();
-        const voiceId = getVoiceForLangRef.current ? getVoiceForLangRef.current(toLang) : null;
-        const ttsRes = await fetch('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: translatedText, lang: toLang, voice: voiceId }),
-          signal: AbortSignal.timeout(30000),
-        });
+      if (ttsRes.ok) {
+        const blob = await ttsRes.blob();
+        console.log(`🔊 [TTS] ${blob.size} bytes`);
 
-        if (ttsRes.ok) {
-          const reader = ttsRes.body.getReader();
-          const chunks = [];
-          let firstChunkTime = 0;
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (!firstChunkTime) {
-              firstChunkTime = performance.now();
-              console.log(`🔊 [TTS] First byte: ${Math.round(firstChunkTime - t0)}ms`);
-            }
-            chunks.push(value);
-          }
-
-          const blob = new Blob(chunks, { type: 'audio/mpeg' });
-          console.log(`🔊 [TTS] Full: ${blob.size} bytes in ${Math.round(performance.now() - t0)}ms`);
-
+        if (blob.size > 0) {
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
           audio.preload = 'auto';
-
           await new Promise(resolve => {
             audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
             audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
             audio.play().catch(() => resolve());
           });
         }
-      } finally {
-        clearInterval(keepAlive);
       }
     } catch (err) {
       console.error('❌ [Pipeline]', err);
       if (onErrorRef.current) onErrorRef.current(err.message);
     }
 
-    // Dọn dẹp
+    // Dọn dẹp + resume recognition
     accumulatedTextRef.current = '';
     currentInterimRef.current = '';
     isSpeakingRef.current = false;
     if (onInterimTextRef.current) onInterimTextRef.current('');
-    if (wantListeningRef.current && onStatusChangeRef.current) {
-      onStatusChangeRef.current('listening');
+
+    // Resume recognition if still wanting to listen
+    if (wantListeningRef.current && recognizerRef.current) {
+      try {
+        await recognizerRef.current.startContinuousRecognitionAsync();
+        if (onStatusChangeRef.current) onStatusChangeRef.current('listening');
+      } catch {
+        if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
+      }
+    } else {
+      if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
     }
   }, []);
 
-  // ====== BƯỚC 2: Silence Timer ======
+  // ====== Silence Timer ======
   const resetSilenceTimer = useCallback(() => {
     clearTimeout(silenceTimeoutRef.current);
     if (isSpeakingRef.current) return;
@@ -199,7 +232,7 @@ export default function useRealtimeConversation({
     }, timeout);
   }, [triggerTranslation]);
 
-  // ====== BƯỚC 1: Start(inputLang) ======
+  // ====== Start(inputLang) — Azure Speech SDK ======
   const start = useCallback(async (inputLang) => {
     try {
       accumulatedTextRef.current = '';
@@ -210,114 +243,145 @@ export default function useRealtimeConversation({
       msgIdRef.current = Date.now();
 
       console.log(`🔑 [Start] inputLang=${inputLang}`);
-      const tokenRes = await fetch('/api/deepgram/token');
-      const { key } = await tokenRes.json();
-      if (!key) throw new Error('No Deepgram API key');
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-      streamRef.current = stream;
+      // Get Azure auth token
+      const tokenRes = await fetch('/api/azure/token');
+      const tokenData = await tokenRes.json();
+      if (!tokenData.token) throw new Error('No Azure Speech token');
 
-      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      audioContextRef.current = audioContext;
-      const source = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
-      source.connect(processor);
-      processor.connect(audioContext.destination);
+      console.log(`🎤 [Azure STT] Token obtained, region=${tokenData.region}`);
 
-      const sampleRate = audioContext.sampleRate;
-      console.log(`🎤 [Start] sampleRate=${sampleRate}`);
+      // Dynamic import — Azure Speech SDK (large, only load when needed)
+      const sdk = await import('microsoft-cognitiveservices-speech-sdk');
 
-      // WebSocket với language CỨng — KHÔNG dùng detect_language
-      const wsUrl = `wss://api.deepgram.com/v1/listen?` +
-        `model=nova-2&language=${inputLang}&smart_format=true&` +
-        `interim_results=true&utterance_end_ms=1500&` +
-        `encoding=linear16&sample_rate=${sampleRate}&channels=1`;
+      // Create speech config from auth token
+      const speechConfig = sdk.SpeechConfig.fromAuthorizationToken(tokenData.token, tokenData.region);
 
-      console.log(`🌐 [WS] language=${inputLang}`);
-      const ws = new WebSocket(wsUrl, ['token', key]);
-      wsRef.current = ws;
+      // Tăng ngưỡng im lặng trước khi Azure ngắt câu (mặc định ~1s → 2s)
+      // Giúp gộp các đoạn nói chậm/ngắt hơi thành 1 câu dài hơn
+      speechConfig.setProperty('Speech_SegmentationSilenceTimeoutMs', '2000');
 
-      ws.onopen = () => {
-        console.log('🟢 [WS] OPEN');
-        wantListeningRef.current = true;
-        setIsListening(true);
-        setActiveLang(inputLang);
-        setElapsed(0);
-        startTimeRef.current = Date.now();
-        elapsedTimerRef.current = setInterval(() => {
-          setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
-        }, 1000);
+      // Map language codes to Azure locale format
+      const langMap = { zh: 'zh-CN', vi: 'vi-VN', en: 'en-US', ja: 'ja-JP', ko: 'ko-KR' };
+      const primaryLang = langMap[inputLang] || `${inputLang}-${inputLang.toUpperCase()}`;
+
+      let audioConfig;
+      let recognizer;
+
+      if (autoDetectRef.current) {
+        // Auto-detect: provide candidate languages
+        const srcLocale = langMap[srcLangCodeRef.current] || 'zh-CN';
+        const tgtLocale = langMap[tgtLangCodeRef.current] || 'vi-VN';
+        const candidates = [...new Set([srcLocale, tgtLocale])]; // deduplicate
+        console.log(`🌐 [Azure STT] Auto-detect candidates: ${candidates.join(', ')}`);
+
+        const autoDetectConfig = sdk.AutoDetectSourceLanguageConfig.fromLanguages(candidates);
+        audioConfig = sdk.AudioConfig.fromDefaultMicrophoneInput();
+        recognizer = sdk.SpeechRecognizer.FromConfig(speechConfig, autoDetectConfig, audioConfig);
+      } else {
+        // Fixed language
+        speechConfig.speechRecognitionLanguage = primaryLang;
+        console.log(`🌐 [Azure STT] language=${primaryLang}`);
+        audioConfig = sdk.AudioConfig.fromDefaultMicrophoneInput();
+        recognizer = new sdk.SpeechRecognizer(speechConfig, audioConfig);
+      }
+
+      recognizerRef.current = recognizer;
+
+      // === EVENT: Recognizing (interim results) ===
+      recognizer.recognizing = (s, e) => {
+        if (isSpeakingRef.current) return;
+        const transcript = e.result.text;
+        if (!transcript) return;
+
+        // Detect language from result if auto-detect
+        if (autoDetectRef.current) {
+          try {
+            const langResult = sdk.AutoDetectSourceLanguageResult.fromResult(e.result);
+            const detectedLang = langResult?.language;
+            if (detectedLang) {
+              const baseLang = detectedLang.split('-')[0];
+              if (baseLang !== inputLangRef.current) {
+                console.log(`🌐 [Auto-detect] ${inputLangRef.current} → ${baseLang}`);
+                inputLangRef.current = baseLang;
+                setActiveLang(baseLang);
+              }
+            }
+          } catch { }
+        }
+
+        console.log(`📝 interim: "${transcript}" (${(e.result.duration / 10000000).toFixed(1)}s)`);
+        currentInterimRef.current = transcript;
+        const display = accumulatedTextRef.current +
+          (accumulatedTextRef.current ? ' ' : '') + transcript;
+        if (onInterimTextRef.current) onInterimTextRef.current(display);
+        resetSilenceTimer();
+      };
+
+      // === EVENT: Recognized (final results) ===
+      recognizer.recognized = (s, e) => {
+        if (isSpeakingRef.current) return;
+        if (e.result.reason === sdk.ResultReason.NoMatch) return;
+
+        const transcript = e.result.text;
+        if (!transcript) return;
+
+        // Detect language
+        if (autoDetectRef.current) {
+          try {
+            const langResult = sdk.AutoDetectSourceLanguageResult.fromResult(e.result);
+            const detectedLang = langResult?.language;
+            if (detectedLang) {
+              const baseLang = detectedLang.split('-')[0];
+              if (baseLang !== inputLangRef.current) {
+                console.log(`🌐 [Auto-detect] ${inputLangRef.current} → ${baseLang}`);
+                inputLangRef.current = baseLang;
+                setActiveLang(baseLang);
+              }
+            }
+          } catch { }
+        }
+
+        console.log(`📝 FINAL: "${transcript}"`);
+        accumulatedTextRef.current += (accumulatedTextRef.current ? ' ' : '') + transcript;
+        currentInterimRef.current = '';
+        if (onInterimTextRef.current) onInterimTextRef.current(accumulatedTextRef.current);
+        resetSilenceTimer();
+      };
+
+      // === EVENT: Canceled ===
+      recognizer.canceled = (s, e) => {
+        if (e.reason === sdk.CancellationReason.Error) {
+          console.error(`❌ [Azure STT] Error: ${e.errorDetails}`);
+          if (onErrorRef.current) onErrorRef.current(`Azure STT: ${e.errorDetails}`);
+        }
+      };
+
+      // === EVENT: Session started (mic truly ready) ===
+      recognizer.sessionStarted = () => {
+        console.log('🟢 [Azure STT] Session started — mic ready!');
         if (onStatusChangeRef.current) onStatusChangeRef.current('listening');
       };
 
-      ws.onmessage = (event) => {
-        if (isSpeakingRef.current) return;
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type !== 'Results') return;
-
-          const transcript = data.channel?.alternatives?.[0]?.transcript || '';
-          const confidence = data.channel?.alternatives?.[0]?.confidence || 0;
-          if (!transcript) return;
-
-          const isFinal = data.is_final;
-          console.log(`📝 ${isFinal ? 'FINAL' : 'interim'}: "${transcript}" (${confidence.toFixed(2)})`);
-
-          if (isFinal) {
-            accumulatedTextRef.current += (accumulatedTextRef.current ? ' ' : '') + transcript;
-            currentInterimRef.current = '';
-            if (onInterimTextRef.current) onInterimTextRef.current(accumulatedTextRef.current);
-          } else {
-            currentInterimRef.current = transcript;
-            const display = accumulatedTextRef.current +
-              (accumulatedTextRef.current ? ' ' : '') + transcript;
-            if (onInterimTextRef.current) onInterimTextRef.current(display);
-          }
-
-          resetSilenceTimer();
-        } catch (err) {
-          console.error('❌ [WS] Parse:', err);
-        }
+      // === EVENT: Session stopped ===
+      recognizer.sessionStopped = () => {
+        console.log('🔴 [Azure STT] Session stopped');
       };
 
-      ws.onerror = () => {
-        console.error('❌ [WS] Error');
-        if (onErrorRef.current) onErrorRef.current('Lỗi kết nối Deepgram');
-      };
+      // Set initial state — connecting (not listening yet)
+      wantListeningRef.current = true;
+      setIsListening(true);
+      setActiveLang(inputLang);
+      setElapsed(0);
+      startTimeRef.current = Date.now();
+      elapsedTimerRef.current = setInterval(() => {
+        setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }, 1000);
+      if (onStatusChangeRef.current) onStatusChangeRef.current('connecting');
 
-      ws.onclose = (e) => {
-        console.log(`🔴 [WS] Closed: ${e.code}`);
-      };
-
-      // Stream audio + Simple VAD
-      let n = 0;
-      processor.onaudioprocess = (e) => {
-        if (!wantListeningRef.current || isSpeakingRef.current) return;
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        const input = e.inputBuffer.getChannelData(0);
-
-        // Simple VAD: tính RMS energy
-        let sumSq = 0;
-        const pcm = new Int16Array(input.length);
-        for (let i = 0; i < input.length; i++) {
-          const s = Math.max(-1, Math.min(1, input[i]));
-          pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-          sumSq += input[i] * input[i];
-        }
-        const rms = Math.sqrt(sumSq / input.length);
-
-        // Nếu có âm thanh (rms > 0.01) VÀ đã có text → reset timer
-        // Ngăn timer fire sớm khi Deepgram chưa trả result nhưng user vẫn đang nói
-        if (rms > 0.01 && accumulatedTextRef.current.trim()) {
-          resetSilenceTimer();
-        }
-
-        wsRef.current.send(pcm.buffer);
-        if (++n % 100 === 0) console.log(`🎤 ${n} chunks (rms=${rms.toFixed(3)})`);
-      };
+      // Start continuous recognition
+      await recognizer.startContinuousRecognitionAsync();
+      console.log('⏳ [Azure STT] Recognition started, waiting for session...');
 
     } catch (err) {
       console.error('❌ [Start]', err);
@@ -326,18 +390,20 @@ export default function useRealtimeConversation({
   }, [resetSilenceTimer]);
 
   // ====== Stop ======
-  const stop = useCallback(() => {
+  const stop = useCallback(async () => {
     console.log('🛑 Stop');
     wantListeningRef.current = false;
     clearTimeout(silenceTimeoutRef.current);
     clearInterval(elapsedTimerRef.current);
 
-    // Đóng WS + mic
-    if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close(1000, 'stop');
-    wsRef.current = null;
-    if (processorRef.current) processorRef.current.disconnect();
-    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-    if (audioContextRef.current?.state !== 'closed') audioContextRef.current?.close();
+    // Stop Azure recognizer
+    if (recognizerRef.current) {
+      try {
+        await recognizerRef.current.stopContinuousRecognitionAsync();
+        recognizerRef.current.close();
+      } catch { }
+      recognizerRef.current = null;
+    }
 
     setIsListening(false);
     setActiveLang(null);
@@ -357,10 +423,10 @@ export default function useRealtimeConversation({
       wantListeningRef.current = false;
       clearTimeout(silenceTimeoutRef.current);
       clearInterval(elapsedTimerRef.current);
-      if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close();
-      if (processorRef.current) processorRef.current.disconnect();
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
-      if (audioContextRef.current?.state !== 'closed') audioContextRef.current?.close();
+      if (recognizerRef.current) {
+        try { recognizerRef.current.close(); } catch { }
+        recognizerRef.current = null;
+      }
     };
   }, []);
 
