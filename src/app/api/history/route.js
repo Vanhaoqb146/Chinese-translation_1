@@ -29,6 +29,7 @@ export async function GET(request) {
       createdAt: row.created_at,
       time: new Date(row.created_at).toLocaleTimeString('vi-VN', {
         hour: '2-digit', minute: '2-digit', second: '2-digit',
+        timeZone: 'Asia/Ho_Chi_Minh',
       }),
     }));
 

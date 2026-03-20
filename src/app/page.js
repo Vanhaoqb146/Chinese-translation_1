@@ -39,7 +39,15 @@ export default function HomePage() {
   const [activeMic, setActiveMic] = useState(null);
   const activeMicRef = useRef(null);
   const [history, setHistory] = useState([]);
-  const [convHistory, setConvHistory] = useState([]);
+  const [convHistory, setConvHistory] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = sessionStorage.getItem('vt_conv_history');
+        return saved ? JSON.parse(saved) : [];
+      } catch { return []; }
+    }
+    return [];
+  });
 
   useEffect(() => { activeMicRef.current = activeMic; }, [activeMic]);
   const [toast, setToast] = useState('');
@@ -49,6 +57,7 @@ export default function HomePage() {
   const ttsAbortRef = useRef(null);
 
   const [mounted, setMounted] = useState(false);
+  const [playingId, setPlayingId] = useState(null); // ID của câu đang phát TTS
 
   useEffect(() => {
     setMounted(true);
@@ -56,6 +65,11 @@ export default function HomePage() {
     if (savedUser) setSessionUser(JSON.parse(savedUser));
     setAuthChecked(true);
   }, []);
+
+  // Sync convHistory → sessionStorage
+  useEffect(() => {
+    try { sessionStorage.setItem('vt_conv_history', JSON.stringify(convHistory)); } catch { /* ignore */ }
+  }, [convHistory]);
 
   const handleLogin = (user) => {
     setSessionUser(user);
@@ -65,6 +79,7 @@ export default function HomePage() {
   const handleLogout = () => {
     setSessionUser(null);
     localStorage.removeItem('vt_user');
+    sessionStorage.removeItem('vt_conv_history');
   };
 
   // Load voices — removed (using Edge TTS API now)
@@ -83,17 +98,24 @@ export default function HomePage() {
   };
 
   // TTS via Edge TTS API
-  const speak = useCallback((text, langCode) => {
+  const speak = useCallback((text, langCode, blockId) => {
     return new Promise(async (resolve) => {
       if (!text) return resolve();
+
+      // Toggle: nếu đang phát câu này → dừng
+      if (blockId && playingId === blockId) {
+        if (ttsAbortRef.current) ttsAbortRef.current.abort();
+        setPlayingId(null);
+        return resolve();
+      }
 
       // Cancel previous TTS if any
       if (ttsAbortRef.current) ttsAbortRef.current.abort();
       const controller = new AbortController();
       ttsAbortRef.current = controller;
+      if (blockId) setPlayingId(blockId);
 
       try {
-        // Map langCode (e.g. 'zh-CN', 'vi-VN') to translateCode (e.g. 'zh', 'vi')
         const baseLang = langCode.split('-')[0].toLowerCase();
         const voice = DEFAULT_VOICES[baseLang] || DEFAULT_VOICES['en'];
 
@@ -106,21 +128,23 @@ export default function HomePage() {
 
         if (!res.ok) {
           console.warn('TTS API error:', res.status);
+          setPlayingId(null);
           return resolve();
         }
 
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
-        audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-        audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-        audio.play().catch(() => resolve());
+        audio.onended = () => { URL.revokeObjectURL(url); setPlayingId(null); resolve(); };
+        audio.onerror = () => { URL.revokeObjectURL(url); setPlayingId(null); resolve(); };
+        audio.play().catch(() => { setPlayingId(null); resolve(); });
       } catch (err) {
         if (err.name !== 'AbortError') console.warn('TTS error:', err);
+        setPlayingId(null);
         resolve();
       }
     });
-  }, []);
+  }, [playingId]);
 
   // Translation hook (Standard mode)
   const { isTranslating, queueTranslation, flush } = useTranslation();
@@ -341,7 +365,7 @@ export default function HomePage() {
                   {sourceBlocks.map((b) => (
                     <div key={b.id} className="sentence" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
                       <span>{b.text}</span>
-                      <button onClick={() => speak(b.text, srcLang.ttsCode)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', opacity: 0.7 }} title="Nghe lại">🔊</button>
+                      <button onClick={() => speak(b.text, srcLang.ttsCode, b.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', opacity: 0.7 }} title={playingId === b.id ? 'Dừng' : 'Nghe lại'}>{playingId === b.id ? '🔇' : '🔊'}</button>
                     </div>
                   ))}
                   {interimText && activeMic === 'source' && <div className="sentence interim">{interimText}</div>}
@@ -370,7 +394,7 @@ export default function HomePage() {
                   {targetBlocks.map((b) => (
                     <div key={b.id} className="sentence" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
                       <span>{b.text}</span>
-                      <button onClick={() => speak(b.text, tgtLang.ttsCode)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', opacity: 0.7 }} title="Nghe lại">🔊</button>
+                      <button onClick={() => speak(b.text, tgtLang.ttsCode, b.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', opacity: 0.7 }} title={playingId === b.id ? 'Dừng' : 'Nghe lại'}>{playingId === b.id ? '🔇' : '🔊'}</button>
                     </div>
                   ))}
                 </div>

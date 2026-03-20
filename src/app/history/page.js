@@ -35,7 +35,7 @@ export default function HistoryPage() {
   const groupedByDay = {};
   history.forEach(item => {
     const d = new Date(item.createdAt);
-    const key = d.toLocaleDateString('vi-VN', { weekday: 'long', year: 'numeric', month: '2-digit', day: '2-digit' });
+    const key = d.toLocaleDateString('vi-VN', { weekday: 'long', year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Ho_Chi_Minh' });
     if (!groupedByDay[key]) groupedByDay[key] = [];
     groupedByDay[key].push(item);
   });

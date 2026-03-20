@@ -40,7 +40,7 @@ export default function useRealtimeConversation({
   engine = 'openai',
   silenceMs = 4000,
   autoDetect = false,
-  holdMode = false,
+  micMode = 'click', // 'click' | 'continuous' | 'hold'
   onInterimText,
   onFinalResult,
   onStatusChange,
@@ -58,6 +58,7 @@ export default function useRealtimeConversation({
   const isSpeakingRef = useRef(false);
   const wantListeningRef = useRef(false);
   const inputLangRef = useRef(null);
+  const currentAudioRef = useRef(null); // TTS Audio instance — cho phép stopSpeaking()
 
   const accumulatedTextRef = useRef('');
   const currentInterimRef = useRef('');
@@ -77,7 +78,7 @@ export default function useRealtimeConversation({
   const silenceMsRef = useRef(silenceMs);
   const getVoiceForLangRef = useRef(getVoiceForLang);
   const autoDetectRef = useRef(autoDetect);
-  const holdModeRef = useRef(holdMode);
+  const micModeRef = useRef(micMode);
 
   useEffect(() => {
     srcLangCodeRef.current = srcLangCode;
@@ -90,7 +91,7 @@ export default function useRealtimeConversation({
     silenceMsRef.current = silenceMs;
     getVoiceForLangRef.current = getVoiceForLang;
     autoDetectRef.current = autoDetect;
-    holdModeRef.current = holdMode;
+    micModeRef.current = micMode;
   });
 
   // ====== Tạo recognizer mới (có thể gọi lại nhiều lần) ======
@@ -239,7 +240,7 @@ export default function useRealtimeConversation({
     clearTimeout(silenceTimeoutRef.current);
     if (isSpeakingRef.current) return;
     // Hold mode: không dùng silence timer — chỉ dịch khi user thả tay
-    if (holdModeRef.current) return;
+    if (micModeRef.current === 'hold') return;
 
     const timeout = silenceMsRef.current || 4000;
     silenceTimeoutRef.current = setTimeout(() => {
@@ -265,7 +266,7 @@ export default function useRealtimeConversation({
       currentInterimRef.current = '';
       if (onInterimTextRef.current) onInterimTextRef.current('');
       // Nếu đang hold mode → về idle; nếu không → để silence timer flow tự xử lý
-      if (holdModeRef.current) {
+      if (micModeRef.current === 'hold') {
         wantListeningRef.current = false;
         clearInterval(elapsedTimerRef.current);
         setIsListening(false);
@@ -413,25 +414,25 @@ export default function useRealtimeConversation({
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
           audio.preload = 'auto';
+          currentAudioRef.current = audio; // Lưu ref để stopSpeaking() có thể dừng
           await new Promise(resolve => {
             let resolved = false;
             const done = () => {
               if (resolved) return;
               resolved = true;
               clearTimeout(safetyTimeout);
+              currentAudioRef.current = null;
               URL.revokeObjectURL(url);
               resolve();
             };
             audio.onended = done;
             audio.onerror = done;
             // [FIX] Timeout an toàn — mobile Safari hay không fire onended
-            // Dùng duration nếu biết, nếu không mặc định 15s
             const safetyTimeout = setTimeout(() => {
               console.warn('⚠️ [TTS] Timeout — onended không fire, force resolve');
               try { audio.pause(); } catch (e) { /* ignore */ }
               done();
             }, 15000);
-            // Khi biết duration → cập nhật timeout chính xác hơn
             audio.onloadedmetadata = () => {
               if (!resolved && audio.duration && isFinite(audio.duration)) {
                 clearTimeout(safetyTimeout);
@@ -459,31 +460,35 @@ export default function useRealtimeConversation({
     isSpeakingRef.current = false;
     if (onInterimTextRef.current) onInterimTextRef.current('');
 
-    // Hold mode: luôn tắt mic sau TTS — user phải nhấn giữ lại
-    if (holdModeRef.current) {
+    // === QUYẾT ĐỊNH SAU TTS: mở mic lại hay dừng ===
+    const shouldResume =
+      wantListeningRef.current && (
+        autoDetectRef.current || // 1-mic tự nhận dạng → luôn resume
+        micModeRef.current === 'continuous' // 2-mic liên tục → resume
+      );
+
+    if (micModeRef.current === 'hold') {
+      // Hold mode: luôn tắt mic sau TTS — user phải nhấn giữ lại
       console.log('🛑 [Hold mode] TTS xong → tắt mic, chờ user nhấn giữ lần nữa');
       wantListeningRef.current = false;
       clearInterval(elapsedTimerRef.current);
       setIsListening(false);
       setActiveLang(null);
       if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
-    }
-    // Chế độ tự nhận dạng (1 mic): mở mic lại để nghe tiếp
-    // Chế độ thủ công (2 mic): tắt mic sau TTS — user bấm lại để nói tiếp
-    else if (autoDetectRef.current && wantListeningRef.current) {
-      // Auto-detect: tạo recognizer mới để tiếp tục nghe
+    } else if (shouldResume) {
+      // Auto-detect HOẶC continuous: tạo recognizer mới để tiếp tục nghe
       try {
-        console.log('🔄 [Auto-detect Resume] Tạo recognizer mới...');
+        console.log('🔄 [Resume] Tạo recognizer mới...');
         await setupRecognizer(inputLangRef.current);
-        console.log('✅ [Auto-detect Resume] Recognizer mới đã sẵn sàng!');
+        console.log('✅ [Resume] Recognizer mới đã sẵn sàng!');
       } catch (err) {
         console.error('❌ [Resume] Không thể tạo recognizer mới:', err);
         if (onErrorRef.current) onErrorRef.current('Không thể bật lại mic: ' + err.message);
         if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
       }
     } else {
-      // Manual mode (2 mic): dừng hẳn sau mỗi câu
-      console.log('🛑 [Manual] TTS xong → tắt mic');
+      // Click mode (2 mic): dừng hẳn sau mỗi câu
+      console.log('🛑 [Click] TTS xong → tắt mic');
       wantListeningRef.current = false;
       clearInterval(elapsedTimerRef.current);
       setIsListening(false);
@@ -585,11 +590,28 @@ export default function useRealtimeConversation({
     }
   }, [triggerTranslation]);
 
+  // ====== StopSpeaking — dừng TTS ngay → pipeline cleanup tự xử lý resume/idle ======
+  const stopSpeaking = useCallback(async () => {
+    console.log('🔇 [StopSpeaking] User tắt loa');
+    if (currentAudioRef.current) {
+      const audio = currentAudioRef.current;
+      try { audio.pause(); audio.currentTime = 0; } catch (e) { /* ignore */ }
+      // [KEY] Dispatch 'ended' event → triggerTranslation promise resolves
+      // → cleanup code chạy bình thường (resume mic hoặc idle tùy mode)
+      try { audio.dispatchEvent(new Event('ended')); } catch (e) { /* ignore */ }
+    }
+    // Không cần set state ở đây — triggerTranslation cleanup sẽ xử lý tất cả
+  }, []);
+
   useEffect(() => {
     return () => {
       wantListeningRef.current = false;
       clearTimeout(silenceTimeoutRef.current);
       clearInterval(elapsedTimerRef.current);
+      if (currentAudioRef.current) {
+        try { currentAudioRef.current.pause(); } catch (e) { /* ignore */ }
+        currentAudioRef.current = null;
+      }
       if (recognizerRef.current) {
         try { recognizerRef.current.close(); } catch (e) { console.warn('⚠️ [Cleanup]', e); }
         recognizerRef.current = null;
@@ -597,5 +619,5 @@ export default function useRealtimeConversation({
     };
   }, []);
 
-  return { isListening, elapsed, activeLang, start, stop, stopHold };
+  return { isListening, elapsed, activeLang, start, stop, stopHold, stopSpeaking, isSpeaking: isSpeakingRef };
 }
