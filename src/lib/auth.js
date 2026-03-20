@@ -1,60 +1,79 @@
-import fs from 'fs/promises';
-import path from 'path';
-
-const dataFilePath = path.join(process.cwd(), 'data', 'users.json');
-
-// Biến lưu trữ dữ liệu trên RAM để giả lập thay đổi trạng thái trên Vercel
-let memUsers = null;
+import { sql } from '@vercel/postgres';
 
 /**
- * Reads and parses the users mock data.
- * @returns {Promise<Array>} List of users
+ * Lấy tất cả users (dùng Postgres thay JSON)
  */
 export async function getUsers() {
-  // Chỉ đọc file 1 lần đầu tiên, sau đó dùng dữ liệu trên RAM
-  if (!memUsers) {
-    try {
-      const fileContents = await fs.readFile(dataFilePath, 'utf8');
-      memUsers = JSON.parse(fileContents);
-    } catch (error) {
-      console.error('Error reading users data:', error);
-      return [];
-    }
+  try {
+    const { rows } = await sql`SELECT * FROM users ORDER BY id ASC`;
+    // Map column names (snake_case → camelCase)
+    return rows.map(r => ({
+      id: r.id,
+      username: r.username,
+      password: r.password,
+      role: r.role,
+      name: r.name,
+      unit: r.unit,
+      avatar: r.avatar,
+      isActive: r.is_active,
+    }));
+  } catch (error) {
+    console.error('Error reading users from DB:', error);
+    return [];
   }
-  return memUsers;
 }
 
 /**
- * Authenticates a user by username and password.
+ * Xác thực đăng nhập
  */
 export async function authenticate(username, password) {
   const users = await getUsers();
-  const user = users.find((u) => u.username === username && u.password === password);
+  const user = users.find(u => u.username === username && u.password === password);
 
   if (user) {
-    // Nếu tài khoản bị Admin vô hiệu hóa, trả về cờ locked
     if (user.isActive === false) return { locked: true };
-
     const { password: _, ...userWithoutPassword } = user;
     return userWithoutPassword;
   }
-
   return null;
 }
 
 /**
- * [HÀM MỚI] Admin dùng để Bật/Tắt quyền truy cập của User
+ * Admin: Bật/Tắt truy cập user
  */
 export async function toggleUserStatus(userId, isActive) {
-  const users = await getUsers();
-  const userIndex = users.findIndex(u => u.id === userId);
+  try {
+    // Không cho khóa admin
+    const { rows } = await sql`SELECT role FROM users WHERE id = ${userId}`;
+    if (rows.length === 0) return false;
+    if (rows[0].role === 'admin') return false;
 
-  if (userIndex !== -1) {
-    // Không cho phép tự khóa tài khoản Admin số 1 để tránh lỗi mất quyền
-    if (users[userIndex].role === 'admin') return false;
-
-    users[userIndex].isActive = isActive;
+    await sql`UPDATE users SET is_active = ${isActive} WHERE id = ${userId}`;
     return true;
+  } catch (error) {
+    console.error('toggleUserStatus error:', error);
+    return false;
   }
-  return false;
+}
+
+/**
+ * Admin: Tạo user mới
+ */
+export async function createUser({ username, password, name, unit, role }) {
+  try {
+    // Check trùng username
+    const { rows: existing } = await sql`SELECT id FROM users WHERE username = ${username}`;
+    if (existing.length > 0) return { error: 'Tài khoản đã tồn tại' };
+
+    const avatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`;
+    const { rows } = await sql`
+      INSERT INTO users (username, password, name, unit, role, avatar, is_active)
+      VALUES (${username}, ${password}, ${name}, ${unit || ''}, ${role || 'user'}, ${avatar}, true)
+      RETURNING id
+    `;
+    return { success: true, id: rows[0].id };
+  } catch (error) {
+    console.error('createUser error:', error);
+    return { error: error.message };
+  }
 }
