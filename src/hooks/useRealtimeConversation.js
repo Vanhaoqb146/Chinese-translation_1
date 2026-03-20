@@ -414,9 +414,37 @@ export default function useRealtimeConversation({
           const audio = new Audio(url);
           audio.preload = 'auto';
           await new Promise(resolve => {
-            audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-            audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-            audio.play().catch(() => resolve());
+            let resolved = false;
+            const done = () => {
+              if (resolved) return;
+              resolved = true;
+              clearTimeout(safetyTimeout);
+              URL.revokeObjectURL(url);
+              resolve();
+            };
+            audio.onended = done;
+            audio.onerror = done;
+            // [FIX] Timeout an toàn — mobile Safari hay không fire onended
+            // Dùng duration nếu biết, nếu không mặc định 15s
+            const safetyTimeout = setTimeout(() => {
+              console.warn('⚠️ [TTS] Timeout — onended không fire, force resolve');
+              try { audio.pause(); } catch (e) { /* ignore */ }
+              done();
+            }, 15000);
+            // Khi biết duration → cập nhật timeout chính xác hơn
+            audio.onloadedmetadata = () => {
+              if (!resolved && audio.duration && isFinite(audio.duration)) {
+                clearTimeout(safetyTimeout);
+                setTimeout(() => {
+                  if (!resolved) {
+                    console.warn(`⚠️ [TTS] Duration timeout (${audio.duration.toFixed(1)}s + 3s)`);
+                    try { audio.pause(); } catch (e) { /* ignore */ }
+                    done();
+                  }
+                }, (audio.duration + 3) * 1000);
+              }
+            };
+            audio.play().catch(done);
           });
         }
       }

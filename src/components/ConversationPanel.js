@@ -242,9 +242,9 @@ export default function ConversationPanel({
                 <div style={{
                   background: 'white',
                   color: '#1f2937',
-                  padding: '10px 14px',
+                  padding: '12px 16px',
                   borderRadius: '14px 14px 4px 4px',
-                  maxWidth: '88%',
+                  maxWidth: '92%',
                   boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
                   display: 'flex',
                   alignItems: 'center',
@@ -252,13 +252,13 @@ export default function ConversationPanel({
                   gap: '8px',
                   borderLeft: isSourceSpeaker ? '3px solid #0ea5e9' : '3px solid #10b981',
                 }}>
-                  <span style={{ fontSize: '15px', fontWeight: '600', lineHeight: '1.5' }}>
-                    <span style={{ fontSize: '13px', marginRight: '6px' }}>{getFlagForLang(h.fromLang)}</span>
+                  <span style={{ fontSize: '18px', fontWeight: '600', lineHeight: '1.5' }}>
+                    <span style={{ fontSize: '15px', marginRight: '6px' }}>{getFlagForLang(h.fromLang)}</span>
                     {h.source}
                   </span>
                   <button
                     onClick={() => speak(h.source, findSttCode(h.fromLang))}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '15px', opacity: 0.6, flexShrink: 0 }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', opacity: 0.6, flexShrink: 0 }}
                     title="Nghe câu gốc"
                   >🔊</button>
                 </div>
@@ -266,9 +266,9 @@ export default function ConversationPanel({
                 <div style={{
                   background: isSourceSpeaker ? 'linear-gradient(135deg, #0ea5e9, #06b6d4)' : 'linear-gradient(135deg, #10b981, #059669)',
                   color: 'white',
-                  padding: '10px 14px',
+                  padding: '12px 16px',
                   borderRadius: '4px 4px 14px 14px',
-                  maxWidth: '88%',
+                  maxWidth: '92%',
                   boxShadow: '0 4px 15px rgba(0,0,0,0.08)',
                   display: 'flex',
                   alignItems: 'center',
@@ -276,13 +276,13 @@ export default function ConversationPanel({
                   gap: '8px',
                   marginTop: '2px',
                 }}>
-                  <span style={{ fontSize: '15px', lineHeight: '1.5' }}>
-                    <span style={{ fontSize: '13px', marginRight: '6px' }}>{getFlagForLang(h.toLang)}</span>
+                  <span style={{ fontSize: '18px', lineHeight: '1.5' }}>
+                    <span style={{ fontSize: '15px', marginRight: '6px' }}>{getFlagForLang(h.toLang)}</span>
                     {h.target}
                   </span>
                   <button
                     onClick={() => speak(h.target, findSttCode(h.toLang))}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '15px', opacity: 0.8, color: 'white', flexShrink: 0 }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', opacity: 0.8, color: 'white', flexShrink: 0 }}
                     title="Nghe bản dịch"
                   >🔊</button>
                 </div>
@@ -299,7 +299,7 @@ export default function ConversationPanel({
               borderRadius: '12px',
               border: '1px dashed rgba(14, 165, 233, 0.3)',
             }}>
-              <div style={{ fontSize: '14px', color: '#4b5563', lineHeight: 1.5 }}>
+              <div style={{ fontSize: '16px', color: '#4b5563', lineHeight: 1.5 }}>
                 <span style={{ fontSize: '11px', opacity: 0.6, marginRight: 6 }}>
                   {conv.activeLang ? getFlagForLang(conv.activeLang) : '🎤'}
                 </span>
@@ -314,8 +314,8 @@ export default function ConversationPanel({
       {/* ===== PHẦN ĐIỀU KHIỂN (DƯỚI CÙNG) ===== */}
       <div className="conv-bottom-controls">
         {/* Cảnh báo */}
-        <div style={{ fontSize: '0.72rem', color: '#ff4d4f', textAlign: 'center', lineHeight: 1.6, fontWeight: 600, background: 'rgba(255,77,79,0.08)', borderRadius: 8, padding: '6px 12px', border: '1px solid rgba(255,77,79,0.2)', margin: '0 16px 8px' }}>
-          ⚠️ Không nên thu âm quá 3 phút để dịch chính xác nhất!
+        <div style={{ fontSize: '0.65rem', color: '#ff4d4f', textAlign: 'center', lineHeight: 1.4, fontWeight: 600, background: 'rgba(255,77,79,0.08)', borderRadius: 6, padding: '4px 10px', border: '1px solid rgba(255,77,79,0.2)', margin: '0 16px 6px' }}>
+          ⚠️ Không nên thu âm quá 3 phút!
         </div>
 
         {/* NÚT MIC */}
@@ -415,7 +415,7 @@ export default function ConversationPanel({
         </div>
 
         {/* Timer + Info — luôn render để tránh layout jump */}
-        <div style={{ textAlign: 'center', marginTop: '-4px', marginBottom: '4px', height: '22px',
+        <div style={{ textAlign: 'center', marginTop: '-2px', marginBottom: '2px', height: '18px',
           visibility: conv.isListening ? 'visible' : 'hidden',
           opacity: conv.isListening ? 1 : 0,
           transition: 'opacity 0.15s',
@@ -425,13 +425,13 @@ export default function ConversationPanel({
 
         {/* CÀI ĐẶT */}
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-          margin: '0 16px 8px', padding: '8px 14px',
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+          margin: '0 16px 6px', padding: '6px 12px',
           background: 'rgba(14, 165, 233, 0.05)',
-          borderRadius: 10, border: '1px solid rgba(14, 165, 233, 0.15)',
+          borderRadius: 8, border: '1px solid rgba(14, 165, 233, 0.15)',
         }}>
           {/* Toggle tự nhận dạng */}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: conv.isListening ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#4b5563', fontWeight: 500, whiteSpace: 'nowrap' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: conv.isListening ? 'not-allowed' : 'pointer', fontSize: '12px', color: '#4b5563', fontWeight: 500, whiteSpace: 'nowrap' }}>
             <div
               onClick={() => !conv.isListening && setAutoDetect(!autoDetect)}
               style={{
@@ -456,7 +456,7 @@ export default function ConversationPanel({
           <div style={{ width: 1, height: 20, background: 'rgba(14,165,233,0.2)' }} />
 
           {/* Toggle nhấn giữ mic */}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: conv.isListening ? 'not-allowed' : 'pointer', fontSize: '13px', color: '#4b5563', fontWeight: 500, whiteSpace: 'nowrap' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: conv.isListening ? 'not-allowed' : 'pointer', fontSize: '12px', color: '#4b5563', fontWeight: 500, whiteSpace: 'nowrap' }}>
             <div
               onClick={() => !conv.isListening && setHoldMode(!holdMode)}
               style={{
