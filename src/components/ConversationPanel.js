@@ -414,12 +414,14 @@ export default function ConversationPanel({
           )}
         </div>
 
-        {/* Timer + Info */}
-        {conv.isListening && (
-          <div style={{ textAlign: 'center', marginTop: '-4px', marginBottom: '4px' }}>
-            <div className="ptt-timer">{formatTime(conv.elapsed)}</div>
-          </div>
-        )}
+        {/* Timer + Info — luôn render để tránh layout jump */}
+        <div style={{ textAlign: 'center', marginTop: '-4px', marginBottom: '4px', height: '22px',
+          visibility: conv.isListening ? 'visible' : 'hidden',
+          opacity: conv.isListening ? 1 : 0,
+          transition: 'opacity 0.15s',
+        }}>
+          <div className="ptt-timer">{formatTime(conv.elapsed)}</div>
+        </div>
 
         {/* CÀI ĐẶT */}
         <div style={{

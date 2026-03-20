@@ -256,6 +256,25 @@ export default function useRealtimeConversation({
     }
     if (!text) return;
 
+    // [FIX] Lọc nhiễu — Azure STT hay bắt được 'phẩy', 'chấm' khi mic ngắt vội
+    const noiseWords = ['phẩy.', 'chấm.', 'phẩy', 'chấm', 'hỏi.', 'hỏi', 'comma', 'period', 'dot'];
+    const cleanLower = text.replace(/[.,!?;:]+$/g, '').trim().toLowerCase();
+    if (noiseWords.includes(cleanLower) || /^[.,!?;:\s]+$/.test(text)) {
+      console.log(`🚫 [Noise] Bỏ qua text nhiễu: "${text}"`);
+      accumulatedTextRef.current = '';
+      currentInterimRef.current = '';
+      if (onInterimTextRef.current) onInterimTextRef.current('');
+      // Nếu đang hold mode → về idle; nếu không → để silence timer flow tự xử lý
+      if (holdModeRef.current) {
+        wantListeningRef.current = false;
+        clearInterval(elapsedTimerRef.current);
+        setIsListening(false);
+        setActiveLang(null);
+        if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
+      }
+      return;
+    }
+
     // [FIX] Xác định ngôn ngữ từ NỘI DUNG text — đáng tin hơn Azure auto-detect
     if (autoDetectRef.current) {
       const textLang = detectLangFromText(text);
