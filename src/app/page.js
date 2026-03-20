@@ -246,6 +246,7 @@ export default function HomePage() {
       LANGUAGES={LANGUAGES}
       history={convHistory}
       setHistory={setConvHistory}
+      sessionUser={sessionUser}
     />
   );
 
@@ -276,6 +277,11 @@ export default function HomePage() {
                     🛡️ Quản trị
                   </button>
                 )}
+
+                {/* NÚT XEM LỊCH SỬ */}
+                <button onClick={() => window.location.href = '/history'} style={{ background: 'rgba(14,165,233,0.15)', color: '#0ea5e9', border: '1px solid rgba(14,165,233,0.3)', padding: '4px 10px', borderRadius: '20px', cursor: 'pointer', fontSize: '12px', marginRight: '5px', fontWeight: 'bold' }}>
+                  📋 Lịch sử
+                </button>
 
                 <img src={sessionUser.avatar} alt="avatar" style={{ width: '26px', height: '26px', borderRadius: '50%' }} />
                 <span>{sessionUser.name}</span>

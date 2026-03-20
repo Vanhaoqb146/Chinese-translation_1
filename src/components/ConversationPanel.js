@@ -60,6 +60,7 @@ export default function ConversationPanel({
   LANGUAGES,
   history,
   setHistory,
+  sessionUser,
 }) {
   const [convStatus, setConvStatus] = useState('idle');
   const [interimText, setInterimText] = useState('');
@@ -90,7 +91,21 @@ export default function ConversationPanel({
     setTimeout(() => {
       if (logBodyRef.current) logBodyRef.current.scrollTop = logBodyRef.current.scrollHeight;
     }, 50);
-  }, [setHistory]);
+
+    // Lưu vào DB (fire-and-forget)
+    if (sessionUser?.username) {
+      fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: sessionUser.username,
+          source: originalText,
+          target: translatedText,
+          fromLang, toLang,
+        }),
+      }).catch(err => console.warn('⚠️ Lưu lịch sử thất bại:', err));
+    }
+  }, [setHistory, sessionUser?.username]);
 
   const handleStatusChange = useCallback((status) => setConvStatus(status), []);
   const handleError = useCallback((msg) => {
