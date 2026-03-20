@@ -41,6 +41,7 @@ export default function useRealtimeConversation({
   silenceMs = 4000,
   autoDetect = false,
   micMode = 'click', // 'click' | 'continuous' | 'hold'
+  autoTTS = true, // Tự động phát TTS sau dịch
   onInterimText,
   onFinalResult,
   onStatusChange,
@@ -79,6 +80,7 @@ export default function useRealtimeConversation({
   const getVoiceForLangRef = useRef(getVoiceForLang);
   const autoDetectRef = useRef(autoDetect);
   const micModeRef = useRef(micMode);
+  const autoTTSRef = useRef(autoTTS);
 
   useEffect(() => {
     srcLangCodeRef.current = srcLangCode;
@@ -92,6 +94,7 @@ export default function useRealtimeConversation({
     getVoiceForLangRef.current = getVoiceForLang;
     autoDetectRef.current = autoDetect;
     micModeRef.current = micMode;
+    autoTTSRef.current = autoTTS;
   });
 
   // ====== Tạo recognizer mới (có thể gọi lại nhiều lần) ======
@@ -395,59 +398,63 @@ export default function useRealtimeConversation({
         conversationHistoryRef.current = conversationHistoryRef.current.slice(-8);
       }
 
-      // ====== TTS ======
-      if (onStatusChangeRef.current) onStatusChangeRef.current('speaking');
+      // ====== TTS (chỉ phát nếu autoTTS bật) ======
+      if (autoTTSRef.current) {
+        if (onStatusChangeRef.current) onStatusChangeRef.current('speaking');
 
-      const voiceId = getVoiceForLangRef.current ? getVoiceForLangRef.current(toLang) : null;
-      const ttsRes = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: translatedText, lang: toLang, voice: voiceId }),
-        signal: AbortSignal.timeout(30000),
-      });
+        const voiceId = getVoiceForLangRef.current ? getVoiceForLangRef.current(toLang) : null;
+        const ttsRes = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: translatedText, lang: toLang, voice: voiceId }),
+          signal: AbortSignal.timeout(30000),
+        });
 
-      if (ttsRes.ok) {
-        const blob = await ttsRes.blob();
-        console.log(`🔊 [TTS] ${blob.size} bytes`);
+        if (ttsRes.ok) {
+          const blob = await ttsRes.blob();
+          console.log(`🔊 [TTS] ${blob.size} bytes`);
 
-        if (blob.size > 0) {
-          const url = URL.createObjectURL(blob);
-          const audio = new Audio(url);
-          audio.preload = 'auto';
-          currentAudioRef.current = audio; // Lưu ref để stopSpeaking() có thể dừng
-          await new Promise(resolve => {
-            let resolved = false;
-            const done = () => {
-              if (resolved) return;
-              resolved = true;
-              clearTimeout(safetyTimeout);
-              currentAudioRef.current = null;
-              URL.revokeObjectURL(url);
-              resolve();
-            };
-            audio.onended = done;
-            audio.onerror = done;
-            // [FIX] Timeout an toàn — mobile Safari hay không fire onended
-            const safetyTimeout = setTimeout(() => {
-              console.warn('⚠️ [TTS] Timeout — onended không fire, force resolve');
-              try { audio.pause(); } catch (e) { /* ignore */ }
-              done();
-            }, 15000);
-            audio.onloadedmetadata = () => {
-              if (!resolved && audio.duration && isFinite(audio.duration)) {
+          if (blob.size > 0) {
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            audio.preload = 'auto';
+            currentAudioRef.current = audio; // Lưu ref để stopSpeaking() có thể dừng
+            await new Promise(resolve => {
+              let resolved = false;
+              const done = () => {
+                if (resolved) return;
+                resolved = true;
                 clearTimeout(safetyTimeout);
-                setTimeout(() => {
-                  if (!resolved) {
-                    console.warn(`⚠️ [TTS] Duration timeout (${audio.duration.toFixed(1)}s + 3s)`);
-                    try { audio.pause(); } catch (e) { /* ignore */ }
-                    done();
-                  }
-                }, (audio.duration + 3) * 1000);
-              }
-            };
-            audio.play().catch(done);
-          });
+                currentAudioRef.current = null;
+                URL.revokeObjectURL(url);
+                resolve();
+              };
+              audio.onended = done;
+              audio.onerror = done;
+              // [FIX] Timeout an toàn — mobile Safari hay không fire onended
+              const safetyTimeout = setTimeout(() => {
+                console.warn('⚠️ [TTS] Timeout — onended không fire, force resolve');
+                try { audio.pause(); } catch (e) { /* ignore */ }
+                done();
+              }, 15000);
+              audio.onloadedmetadata = () => {
+                if (!resolved && audio.duration && isFinite(audio.duration)) {
+                  clearTimeout(safetyTimeout);
+                  setTimeout(() => {
+                    if (!resolved) {
+                      console.warn(`⚠️ [TTS] Duration timeout (${audio.duration.toFixed(1)}s + 3s)`);
+                      try { audio.pause(); } catch (e) { /* ignore */ }
+                      done();
+                    }
+                  }, (audio.duration + 3) * 1000);
+                }
+              };
+              audio.play().catch(done);
+            });
+          }
         }
+      } else {
+        console.log('🔇 [TTS] Bỏ qua — autoTTS tắt');
       }
     } catch (err) {
       console.error('❌ [Pipeline]', err);

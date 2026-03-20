@@ -69,6 +69,7 @@ export default function ConversationPanel({
   const [tgtVoice, setTgtVoice] = useState(() => (VOICE_OPTIONS[tgtLang.translateCode]?.[0]?.id || ''));
   const [autoDetect, setAutoDetect] = useState(false);
   const [micMode, setMicMode] = useState('click'); // 'click' | 'continuous' | 'hold'
+  const [autoTTS, setAutoTTS] = useState(true); // Tự động phát TTS sau dịch
   const logBodyRef = useRef(null);
   const replayAudioRef = useRef(null); // Audio instance cho replay 🔊
   const [replayingId, setReplayingId] = useState(null); // ID câu đang replay
@@ -134,6 +135,7 @@ export default function ConversationPanel({
     silenceMs: silenceSeconds * 1000,
     autoDetect,
     micMode,
+    autoTTS,
     onInterimText: handleInterimText,
     onFinalResult: handleFinalResult,
     onStatusChange: handleStatusChange,
@@ -567,6 +569,31 @@ export default function ConversationPanel({
               }} />
             </div>
             🌐 Auto
+          </label>
+
+          <div style={{ width: 1, height: 20, background: 'rgba(14,165,233,0.2)' }} />
+
+          {/* Toggle TTS */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: conv.isListening ? 'not-allowed' : 'pointer', fontSize: '12px', color: '#4b5563', fontWeight: 500, whiteSpace: 'nowrap' }}>
+            <div
+              onClick={() => !conv.isListening && setAutoTTS(!autoTTS)}
+              style={{
+                width: 36, height: 20, borderRadius: 10,
+                background: autoTTS ? '#0ea5e9' : '#d1d5db',
+                position: 'relative', transition: 'background 0.2s',
+                cursor: conv.isListening ? 'not-allowed' : 'pointer',
+                opacity: conv.isListening ? 0.5 : 1,
+              }}
+            >
+              <div style={{
+                width: 16, height: 16, borderRadius: '50%',
+                background: 'white', position: 'absolute',
+                top: 2, left: autoTTS ? 18 : 2,
+                transition: 'left 0.2s',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+              }} />
+            </div>
+            {autoTTS ? '🔊 TTS' : '🔇 TTS'}
           </label>
 
           {/* Chế độ mic */}
