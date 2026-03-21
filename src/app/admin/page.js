@@ -67,6 +67,22 @@ export default function AdminDashboard() {
     finally { setCreating(false); }
   };
 
+  const handleResetPassword = async (userId, userName) => {
+    const newPw = window.prompt(`Nhập mật khẩu mới cho "${userName}":`);
+    if (!newPw) return;
+    if (newPw.length < 3) { alert('Mật khẩu phải có ít nhất 3 ký tự'); return; }
+    try {
+      const res = await fetch('/api/admin/users', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, newPassword: newPw }),
+      });
+      const data = await res.json();
+      if (res.ok) alert('✅ Đặt lại mật khẩu thành công!');
+      else alert(data.error);
+    } catch { alert('Lỗi kết nối máy chủ'); }
+  };
+
   if (loading) return (
     <div style={{ color: 'white', textAlign: 'center', padding: 50, minHeight: '100vh', background: 'var(--bg)' }}>
       ⏳ Đang tải...
@@ -178,6 +194,21 @@ export default function AdminDashboard() {
                   @{u.username} · {u.unit || '—'}
                 </div>
               </div>
+
+              {/* Reset Password */}
+              {u.role !== 'admin' && (
+                <button
+                  onClick={() => handleResetPassword(u.id, u.name)}
+                  style={{
+                    background: 'rgba(14,165,233,0.15)', color: '#0ea5e9',
+                    border: '1px solid rgba(14,165,233,0.3)', padding: '6px 10px',
+                    borderRadius: 20, fontSize: 11, fontWeight: 700,
+                    cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+                  }}
+                >
+                  🔑 MK
+                </button>
+              )}
 
               {/* Toggle */}
               <button

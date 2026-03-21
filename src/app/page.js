@@ -4,6 +4,7 @@ import useSpeechRecognition from '@/hooks/useSpeechRecognition';
 import useTranslation from '@/hooks/useTranslation';
 import ConversationPanel from '@/components/ConversationPanel';
 import LoginForm from '@/components/LoginForm';
+import ChangePasswordModal from '@/components/ChangePasswordModal';
 
 const LANGUAGES = [
   { flag: '🇨🇳', name: '中文', sttCode: 'zh-CN', translateCode: 'zh', ttsCode: 'zh-CN' },
@@ -26,6 +27,7 @@ const DEFAULT_VOICES = {
 export default function HomePage() {
   const [sessionUser, setSessionUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
+  const [showChangePw, setShowChangePw] = useState(false);
 
   const [viewMode, setViewMode] = useState('standard');
   const [srcIdx, setSrcIdx] = useState(0);
@@ -309,6 +311,7 @@ export default function HomePage() {
 
                 <img src={sessionUser.avatar} alt="avatar" style={{ width: '26px', height: '26px', borderRadius: '50%' }} />
                 <span>{sessionUser.name}</span>
+                <button onClick={() => setShowChangePw(true)} style={{ background: 'none', border: 'none', color: 'var(--text2)', cursor: 'pointer', marginLeft: '2px', fontSize: '14px', display: 'flex', alignItems: 'center' }} title="Đổi mật khẩu">🔑</button>
                 <button onClick={handleLogout} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', marginLeft: '2px', fontSize: '14px', display: 'flex', alignItems: 'center' }} title="Đăng xuất">🚪</button>
               </div>
             )}
@@ -426,6 +429,7 @@ export default function HomePage() {
       </div>
 
       {toast && <div className="toast">{toast}</div>}
+      {showChangePw && <ChangePasswordModal user={sessionUser} onClose={() => setShowChangePw(false)} />}
     </div>
   );
 }

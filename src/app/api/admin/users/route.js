@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getUsers, toggleUserStatus, createUser } from '@/lib/auth';
+import { getUsers, toggleUserStatus, createUser, adminResetPassword } from '@/lib/auth';
 
 // GET — Lấy danh sách người dùng
 export async function GET() {
@@ -50,6 +50,27 @@ export async function PATCH(request) {
     } else {
       return NextResponse.json({ error: 'Không thể cập nhật (Tài khoản Admin gốc không được phép khóa)' }, { status: 403 });
     }
+  } catch (error) {
+    return NextResponse.json({ error: 'Lỗi server' }, { status: 500 });
+  }
+}
+
+// PUT — Admin đặt lại mật khẩu cho user
+export async function PUT(request) {
+  try {
+    const { userId, newPassword } = await request.json();
+
+    if (!userId || !newPassword) {
+      return NextResponse.json({ error: 'Thiếu thông tin (userId, newPassword)' }, { status: 400 });
+    }
+
+    const result = await adminResetPassword(userId, newPassword);
+
+    if (result.error) {
+      return NextResponse.json({ error: result.error }, { status: 403 });
+    }
+
+    return NextResponse.json({ message: 'Đặt lại mật khẩu thành công' }, { status: 200 });
   } catch (error) {
     return NextResponse.json({ error: 'Lỗi server' }, { status: 500 });
   }
