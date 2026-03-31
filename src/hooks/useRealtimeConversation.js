@@ -400,9 +400,14 @@ export default function useRealtimeConversation({
 
       // ====== TTS (chỉ phát nếu autoTTS bật) ======
       if (autoTTSRef.current) {
+        const voiceId = getVoiceForLangRef.current ? getVoiceForLangRef.current(toLang) : null;
+
+        // Kiểm tra mute: nếu voiceId === '__MUTED__' → bỏ qua TTS cho ngôn ngữ này
+        if (voiceId === '__MUTED__') {
+          console.log(`🔇 [TTS] Bỏ qua — ngôn ngữ ${toLang} đang bị tắt loa`);
+        } else {
         if (onStatusChangeRef.current) onStatusChangeRef.current('speaking');
 
-        const voiceId = getVoiceForLangRef.current ? getVoiceForLangRef.current(toLang) : null;
         const ttsRes = await fetch('/api/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -453,6 +458,7 @@ export default function useRealtimeConversation({
             });
           }
         }
+        } // end mute else
       } else {
         console.log('🔇 [TTS] Bỏ qua — autoTTS tắt');
       }

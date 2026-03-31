@@ -425,7 +425,7 @@ export default function HomePage() {
           </>
         )}
 
-        <footer className="footer"> Ứng dụng dịch thuật thông minh </footer>
+        {viewMode !== 'conversation' && <footer className="footer"> Ứng dụng dịch thuật thông minh </footer>}
       </div>
 
       {toast && <div className="toast">{toast}</div>}
