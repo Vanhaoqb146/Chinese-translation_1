@@ -65,6 +65,7 @@ export default function useRealtimeConversation({
   const wantListeningRef = useRef(false);
   const inputLangRef = useRef(null);
   const currentAudioRef = useRef(null);
+  const currentAudioUrlRef = useRef(null);
 
   // ElevenLabs-specific refs
   const elWsRef = useRef(null);       // WebSocket instance
@@ -108,6 +109,28 @@ export default function useRealtimeConversation({
     autoTTSRef.current = autoTTS;
     providerRef.current = provider;
   });
+
+  // Reuse one HTMLAudioElement to avoid iOS Safari blocking autoplay on new audio elements.
+  const getOrCreateTtsAudio = useCallback(() => {
+    if (typeof window === 'undefined') return null;
+    if (!currentAudioRef.current) {
+      const audio = new Audio();
+      audio.preload = 'auto';
+      audio.playsInline = true;
+      try {
+        audio.setAttribute('playsinline', 'true');
+        audio.setAttribute('webkit-playsinline', 'true');
+      } catch (e) { /* ignore */ }
+      currentAudioRef.current = audio;
+    }
+    return currentAudioRef.current;
+  }, []);
+
+  const releaseCurrentAudioUrl = useCallback(() => {
+    if (!currentAudioUrlRef.current) return;
+    try { URL.revokeObjectURL(currentAudioUrlRef.current); } catch (e) { /* ignore */ }
+    currentAudioUrlRef.current = null;
+  }, []);
 
   // ====== Tạo recognizer mới (có thể gọi lại nhiều lần) ======
   const setupRecognizer = useCallback(async (inputLang) => {
@@ -603,41 +626,63 @@ export default function useRealtimeConversation({
 
             if (blob.size > 0) {
               const url = URL.createObjectURL(blob);
-              const audio = new Audio(url);
-              audio.preload = 'auto';
-              currentAudioRef.current = audio; // Lưu ref để stopSpeaking() có thể dừng
-              await new Promise(resolve => {
-                let resolved = false;
-                const done = () => {
-                  if (resolved) return;
-                  resolved = true;
-                  clearTimeout(safetyTimeout);
-                  currentAudioRef.current = null;
-                  URL.revokeObjectURL(url);
-                  resolve();
-                };
-                audio.onended = done;
-                audio.onerror = done;
-                // [FIX] Timeout an toàn — mobile Safari hay không fire onended
-                const safetyTimeout = setTimeout(() => {
-                  console.warn('⚠️ [TTS] Timeout — onended không fire, force resolve');
-                  try { audio.pause(); } catch (e) { /* ignore */ }
-                  done();
-                }, 15000);
-                audio.onloadedmetadata = () => {
-                  if (!resolved && audio.duration && isFinite(audio.duration)) {
+              const audio = getOrCreateTtsAudio();
+              if (!audio) {
+                URL.revokeObjectURL(url);
+              } else {
+                releaseCurrentAudioUrl();
+                currentAudioUrlRef.current = url;
+                audio.src = url;
+                audio.currentTime = 0;
+                audio.load();
+
+                await new Promise(resolve => {
+                  let resolved = false;
+                  let durationTimeout = null;
+
+                  const done = () => {
+                    if (resolved) return;
+                    resolved = true;
                     clearTimeout(safetyTimeout);
-                    setTimeout(() => {
-                      if (!resolved) {
-                        console.warn(`⚠️ [TTS] Duration timeout (${audio.duration.toFixed(1)}s + 3s)`);
-                        try { audio.pause(); } catch (e) { /* ignore */ }
-                        done();
-                      }
-                    }, (audio.duration + 3) * 1000);
-                  }
-                };
-                audio.play().catch(done);
-              });
+                    if (durationTimeout) clearTimeout(durationTimeout);
+                    audio.onended = null;
+                    audio.onerror = null;
+                    audio.onloadedmetadata = null;
+                    if (currentAudioUrlRef.current === url) {
+                      try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ }
+                      currentAudioUrlRef.current = null;
+                    }
+                    resolve();
+                  };
+
+                  audio.onended = done;
+                  audio.onerror = done;
+                  // [FIX] Timeout an toàn — mobile Safari hay không fire onended
+                  const safetyTimeout = setTimeout(() => {
+                    console.warn('⚠️ [TTS] Timeout — onended không fire, force resolve');
+                    try { audio.pause(); } catch (e) { /* ignore */ }
+                    done();
+                  }, 15000);
+
+                  audio.onloadedmetadata = () => {
+                    if (!resolved && audio.duration && isFinite(audio.duration)) {
+                      clearTimeout(safetyTimeout);
+                      durationTimeout = setTimeout(() => {
+                        if (!resolved) {
+                          console.warn(`⚠️ [TTS] Duration timeout (${audio.duration.toFixed(1)}s + 3s)`);
+                          try { audio.pause(); } catch (e) { /* ignore */ }
+                          done();
+                        }
+                      }, (audio.duration + 3) * 1000);
+                    }
+                  };
+
+                  audio.play().catch((err) => {
+                    console.warn('⚠️ [TTS] audio.play() blocked:', err);
+                    done();
+                  });
+                });
+              }
             }
           }
         } // end mute else
@@ -693,7 +738,7 @@ export default function useRealtimeConversation({
       setActiveLang(null);
       if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
     }
-  }, [setupRecognizer, setupElevenLabsSTT]);
+  }, [setupRecognizer, setupElevenLabsSTT, getOrCreateTtsAudio, releaseCurrentAudioUrl]);
 
   // ====== Start(inputLang) — entry point ======
   const start = useCallback(async (inputLang) => {
@@ -706,6 +751,9 @@ export default function useRealtimeConversation({
       msgIdRef.current = Date.now();
 
       console.log(`🔑 [Start] inputLang=${inputLang}`);
+
+      // Initialize and reuse one audio element for the whole session (iOS Safari autoplay stability).
+      getOrCreateTtsAudio();
 
       // Set initial state — connecting (not listening yet)
       wantListeningRef.current = true;
@@ -732,7 +780,7 @@ export default function useRealtimeConversation({
       wantListeningRef.current = false;
       setIsListening(false);
     }
-  }, [setupRecognizer, setupElevenLabsSTT]);
+  }, [setupRecognizer, setupElevenLabsSTT, getOrCreateTtsAudio]);
 
   // ====== Stop ======
   const stop = useCallback(async () => {
@@ -849,8 +897,16 @@ export default function useRealtimeConversation({
       clearTimeout(silenceTimeoutRef.current);
       clearInterval(elapsedTimerRef.current);
       if (currentAudioRef.current) {
-        try { currentAudioRef.current.pause(); } catch (e) { /* ignore */ }
+        try {
+          currentAudioRef.current.pause();
+          currentAudioRef.current.removeAttribute('src');
+          currentAudioRef.current.load();
+        } catch (e) { /* ignore */ }
         currentAudioRef.current = null;
+      }
+      if (currentAudioUrlRef.current) {
+        try { URL.revokeObjectURL(currentAudioUrlRef.current); } catch (e) { /* ignore */ }
+        currentAudioUrlRef.current = null;
       }
       if (recognizerRef.current) {
         try { recognizerRef.current.close(); } catch (e) { console.warn('\u26A0\uFE0F [Cleanup]', e); }
