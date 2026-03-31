@@ -2,10 +2,14 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 /**
- * useRealtimeConversation — Azure Speech STT + GPT-4o + Azure TTS
+ * useRealtimeConversation — Multi-provider STT + GPT-4o + TTS
  *
- * start(inputLang) → Azure SpeechRecognizer (continuous)
- * BƯỚC 1: Azure STT → interim/final text + auto language detection
+ * Supports:
+ *   - Azure Speech SDK (STT)
+ *   - ElevenLabs Scribe v2 (STT via WebSocket)
+ *
+ * start(inputLang) → STT (continuous)
+ * BƯỚC 1: STT → interim/final text + auto language detection
  * BƯỚC 2: Silence timer → trigger translation
  * BƯỚC 3: Khóa mic → REST translate → hiện dịch → TTS
  * BƯỚC 4: TTS xong → tạo recognizer MỚI → resume recognition
@@ -41,7 +45,8 @@ export default function useRealtimeConversation({
   silenceMs = 4000,
   autoDetect = false,
   micMode = 'click', // 'click' | 'continuous' | 'hold'
-  autoTTS = true, // Tự động phát TTS sau dịch
+  autoTTS = true,
+  provider = 'azure', // 'azure' | 'elevenlabs'
   onInterimText,
   onFinalResult,
   onStatusChange,
@@ -59,7 +64,12 @@ export default function useRealtimeConversation({
   const isSpeakingRef = useRef(false);
   const wantListeningRef = useRef(false);
   const inputLangRef = useRef(null);
-  const currentAudioRef = useRef(null); // TTS Audio instance — cho phép stopSpeaking()
+  const currentAudioRef = useRef(null);
+
+  // ElevenLabs-specific refs
+  const elWsRef = useRef(null);       // WebSocket instance
+  const elMediaRef = useRef(null);    // MediaRecorder
+  const elStreamRef = useRef(null);   // MediaStream (mic)
 
   const accumulatedTextRef = useRef('');
   const currentInterimRef = useRef('');
@@ -81,6 +91,7 @@ export default function useRealtimeConversation({
   const autoDetectRef = useRef(autoDetect);
   const micModeRef = useRef(micMode);
   const autoTTSRef = useRef(autoTTS);
+  const providerRef = useRef(provider);
 
   useEffect(() => {
     srcLangCodeRef.current = srcLangCode;
@@ -95,6 +106,7 @@ export default function useRealtimeConversation({
     autoDetectRef.current = autoDetect;
     micModeRef.current = micMode;
     autoTTSRef.current = autoTTS;
+    providerRef.current = provider;
   });
 
   // ====== Tạo recognizer mới (có thể gọi lại nhiều lần) ======
@@ -238,6 +250,155 @@ export default function useRealtimeConversation({
     return recognizer;
   }, []);
 
+  // ====== Setup ElevenLabs Scribe v2 STT (WebSocket) ======
+  const setupElevenLabsSTT = useCallback(async (inputLang) => {
+    // Cleanup any previous ElevenLabs resources
+    if (elWsRef.current) {
+      try { elWsRef.current.close(); } catch (e) { /* ignore */ }
+      elWsRef.current = null;
+    }
+    if (elMediaRef.current) {
+      try { elMediaRef.current.stop(); } catch (e) { /* ignore */ }
+      elMediaRef.current = null;
+    }
+    if (elStreamRef.current) {
+      try { elStreamRef.current.getTracks().forEach(t => t.stop()); } catch (e) { /* ignore */ }
+      elStreamRef.current = null;
+    }
+
+    // Get token from our backend
+    const tokenRes = await fetch('/api/elevenlabs');
+    const tokenData = await tokenRes.json();
+    if (!tokenData.token) throw new Error('No ElevenLabs token');
+
+    console.log(`\u{1F511} [ElevenLabs STT] Token received`);
+
+    // Language code mapping
+    const langMap = { zh: 'zh', vi: 'vi', en: 'en', ja: 'ja', ko: 'ko' };
+    const elLang = langMap[inputLang] || inputLang;
+
+    // Get mic permission BEFORE opening WebSocket
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { sampleRate: { ideal: 16000 }, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+    });
+    elStreamRef.current = stream;
+
+    // Open WebSocket — ElevenLabs single-use token authentication via query parameter "token"
+    const wsUrl = `wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime&language_code=${encodeURIComponent(elLang)}&audio_format=pcm_16000&commit_strategy=vad&token=${encodeURIComponent(tokenData.token)}`;
+    const ws = new WebSocket(wsUrl);
+    elWsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('\u{1F7E2} [ElevenLabs STT] WebSocket connected & authenticated');
+
+      // Start microphone streaming
+      try {
+
+        // Use AudioContext to downsample to 16kHz PCM
+        const audioContext = new AudioContext({ sampleRate: 16000 });
+        const source = audioContext.createMediaStreamSource(stream);
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+
+        processor.onaudioprocess = (e) => {
+          if (!elWsRef.current || elWsRef.current.readyState !== WebSocket.OPEN) return;
+          if (isSpeakingRef.current) return;
+
+          const pcmData = e.inputBuffer.getChannelData(0);
+          // Convert Float32 to Int16
+          const int16 = new Int16Array(pcmData.length);
+          for (let i = 0; i < pcmData.length; i++) {
+            int16[i] = Math.max(-32768, Math.min(32767, Math.floor(pcmData[i] * 32768)));
+          }
+
+          // Send as base64 — chunked to avoid call stack overflow
+          const bytes = new Uint8Array(int16.buffer);
+          let binary = '';
+          for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const base64 = btoa(binary);
+
+          try {
+            ws.send(JSON.stringify({
+              message_type: 'input_audio_chunk',
+              audio_base_64: base64,
+              sample_rate: 16000,
+            }));
+          } catch (sendErr) {
+            // WebSocket might have closed
+          }
+        };
+
+        // Store processor ref for cleanup
+        elMediaRef.current = { processor, source, audioContext };
+
+        if (onStatusChangeRef.current) onStatusChangeRef.current('listening');
+        console.log('\u{1F3A4} [ElevenLabs STT] Microphone streaming...');
+      } catch (micErr) {
+        console.error('\u274C [ElevenLabs STT] Mic error:', micErr);
+        if (onErrorRef.current) onErrorRef.current('Mic: ' + micErr.message);
+      }
+    };
+
+    ws.onmessage = (event) => {
+      if (isSpeakingRef.current) return;
+      try {
+        const data = JSON.parse(event.data);
+        const messageType = data.message_type || data.type;
+        console.log('\u{1F4E9} [EL WS]', messageType, JSON.stringify(data).slice(0, 200));
+
+        if (messageType === 'partial_transcript') {
+          const transcript = data.text || '';
+          if (!transcript) return;
+
+          console.log(`\u{1F4DD} [EL] interim: "${transcript}"`);
+          currentInterimRef.current = transcript;
+          const display = accumulatedTextRef.current + (accumulatedTextRef.current ? ' ' : '') + transcript;
+          if (onInterimTextRef.current) onInterimTextRef.current(display);
+          resetSilenceTimer();
+          return;
+        }
+
+        // Ignore timestamps echo event to avoid duplicate append.
+        if (messageType === 'committed_transcript_with_timestamps') return;
+
+        if (messageType === 'committed_transcript') {
+          const transcript = data.text || '';
+          if (!transcript) return;
+
+          console.log(`\u{1F4DD} [EL] FINAL: "${transcript}"`);
+          accumulatedTextRef.current += (accumulatedTextRef.current ? ' ' : '') + transcript;
+          currentInterimRef.current = '';
+          if (onInterimTextRef.current) onInterimTextRef.current(accumulatedTextRef.current);
+          resetSilenceTimer();
+          return;
+        }
+
+        if (messageType && (data.error || messageType === 'error' || messageType.endsWith('error'))) {
+          const errMsg = data.error || data.message || 'Unknown ElevenLabs STT error';
+          console.error(`\u274C [ElevenLabs STT] ${messageType}: ${errMsg}`);
+          if (onErrorRef.current) onErrorRef.current(`ElevenLabs STT: ${errMsg}`);
+        }
+      } catch (e) {
+        console.warn('\u26A0\uFE0F [ElevenLabs STT] Parse error:', e);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error('\u274C [ElevenLabs STT] WebSocket error:', err);
+      if (onErrorRef.current) onErrorRef.current('ElevenLabs STT WebSocket error');
+    };
+
+    ws.onclose = (e) => {
+      console.log(`\u{1F534} [ElevenLabs STT] WebSocket closed: code=${e.code}, reason="${e.reason}"`);
+    };
+
+    return ws;
+  }, []);
+
   // ====== Silence Timer ======
   const resetSilenceTimer = useCallback(() => {
     clearTimeout(silenceTimeoutRef.current);
@@ -310,14 +471,35 @@ export default function useRealtimeConversation({
     isSpeakingRef.current = true;
     if (onStatusChangeRef.current) onStatusChangeRef.current('translating');
 
-    // Đóng recognizer cũ hoàn toàn (không chỉ pause — vì session sẽ chết)
-    if (recognizerRef.current) {
-      try {
-        await recognizerRef.current.stopContinuousRecognitionAsync();
-        recognizerRef.current.close();
-        console.log('🔇 [Mic] Đã đóng recognizer cũ');
-      } catch (e) { console.warn('⚠️ [Stop recognizer]', e); }
-      recognizerRef.current = null;
+    // Đóng recognizer/WebSocket cũ hoàn toàn
+    if (providerRef.current === 'elevenlabs') {
+      // Cleanup ElevenLabs
+      if (elWsRef.current) {
+        try { elWsRef.current.close(); } catch (e) { /* ignore */ }
+        elWsRef.current = null;
+      }
+      if (elMediaRef.current) {
+        try {
+          elMediaRef.current.processor?.disconnect();
+          elMediaRef.current.source?.disconnect();
+          elMediaRef.current.audioContext?.close();
+        } catch (e) { /* ignore */ }
+        elMediaRef.current = null;
+      }
+      if (elStreamRef.current) {
+        try { elStreamRef.current.getTracks().forEach(t => t.stop()); } catch (e) { /* ignore */ }
+        elStreamRef.current = null;
+      }
+    } else {
+      // Cleanup Azure
+      if (recognizerRef.current) {
+        try {
+          await recognizerRef.current.stopContinuousRecognitionAsync();
+          recognizerRef.current.close();
+          console.log('\u{1F507} [Mic] Đã đóng recognizer cũ');
+        } catch (e) { console.warn('\u26A0\uFE0F [Stop recognizer]', e); }
+        recognizerRef.current = null;
+      }
     }
 
     try {
@@ -406,58 +588,58 @@ export default function useRealtimeConversation({
         if (voiceId === '__MUTED__') {
           console.log(`🔇 [TTS] Bỏ qua — ngôn ngữ ${toLang} đang bị tắt loa`);
         } else {
-        if (onStatusChangeRef.current) onStatusChangeRef.current('speaking');
+          if (onStatusChangeRef.current) onStatusChangeRef.current('speaking');
 
-        const ttsRes = await fetch('/api/tts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: translatedText, lang: toLang, voice: voiceId }),
-          signal: AbortSignal.timeout(30000),
-        });
+          const ttsRes = await fetch('/api/tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: translatedText, lang: toLang, voice: voiceId, provider: providerRef.current }),
+            signal: AbortSignal.timeout(30000),
+          });
 
-        if (ttsRes.ok) {
-          const blob = await ttsRes.blob();
-          console.log(`🔊 [TTS] ${blob.size} bytes`);
+          if (ttsRes.ok) {
+            const blob = await ttsRes.blob();
+            console.log(`🔊 [TTS] ${blob.size} bytes`);
 
-          if (blob.size > 0) {
-            const url = URL.createObjectURL(blob);
-            const audio = new Audio(url);
-            audio.preload = 'auto';
-            currentAudioRef.current = audio; // Lưu ref để stopSpeaking() có thể dừng
-            await new Promise(resolve => {
-              let resolved = false;
-              const done = () => {
-                if (resolved) return;
-                resolved = true;
-                clearTimeout(safetyTimeout);
-                currentAudioRef.current = null;
-                URL.revokeObjectURL(url);
-                resolve();
-              };
-              audio.onended = done;
-              audio.onerror = done;
-              // [FIX] Timeout an toàn — mobile Safari hay không fire onended
-              const safetyTimeout = setTimeout(() => {
-                console.warn('⚠️ [TTS] Timeout — onended không fire, force resolve');
-                try { audio.pause(); } catch (e) { /* ignore */ }
-                done();
-              }, 15000);
-              audio.onloadedmetadata = () => {
-                if (!resolved && audio.duration && isFinite(audio.duration)) {
+            if (blob.size > 0) {
+              const url = URL.createObjectURL(blob);
+              const audio = new Audio(url);
+              audio.preload = 'auto';
+              currentAudioRef.current = audio; // Lưu ref để stopSpeaking() có thể dừng
+              await new Promise(resolve => {
+                let resolved = false;
+                const done = () => {
+                  if (resolved) return;
+                  resolved = true;
                   clearTimeout(safetyTimeout);
-                  setTimeout(() => {
-                    if (!resolved) {
-                      console.warn(`⚠️ [TTS] Duration timeout (${audio.duration.toFixed(1)}s + 3s)`);
-                      try { audio.pause(); } catch (e) { /* ignore */ }
-                      done();
-                    }
-                  }, (audio.duration + 3) * 1000);
-                }
-              };
-              audio.play().catch(done);
-            });
+                  currentAudioRef.current = null;
+                  URL.revokeObjectURL(url);
+                  resolve();
+                };
+                audio.onended = done;
+                audio.onerror = done;
+                // [FIX] Timeout an toàn — mobile Safari hay không fire onended
+                const safetyTimeout = setTimeout(() => {
+                  console.warn('⚠️ [TTS] Timeout — onended không fire, force resolve');
+                  try { audio.pause(); } catch (e) { /* ignore */ }
+                  done();
+                }, 15000);
+                audio.onloadedmetadata = () => {
+                  if (!resolved && audio.duration && isFinite(audio.duration)) {
+                    clearTimeout(safetyTimeout);
+                    setTimeout(() => {
+                      if (!resolved) {
+                        console.warn(`⚠️ [TTS] Duration timeout (${audio.duration.toFixed(1)}s + 3s)`);
+                        try { audio.pause(); } catch (e) { /* ignore */ }
+                        done();
+                      }
+                    }, (audio.duration + 3) * 1000);
+                  }
+                };
+                audio.play().catch(done);
+              });
+            }
           }
-        }
         } // end mute else
       } else {
         console.log('🔇 [TTS] Bỏ qua — autoTTS tắt');
@@ -489,11 +671,14 @@ export default function useRealtimeConversation({
       setActiveLang(null);
       if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
     } else if (shouldResume) {
-      // Auto-detect HOẶC continuous: tạo recognizer mới để tiếp tục nghe
       try {
-        console.log('🔄 [Resume] Tạo recognizer mới...');
-        await setupRecognizer(inputLangRef.current);
-        console.log('✅ [Resume] Recognizer mới đã sẵn sàng!');
+        console.log('\u{1F504} [Resume] Tạo STT mới...');
+        if (providerRef.current === 'elevenlabs') {
+          await setupElevenLabsSTT(inputLangRef.current);
+        } else {
+          await setupRecognizer(inputLangRef.current);
+        }
+        console.log('\u2705 [Resume] STT mới đã sẵn sàng!');
       } catch (err) {
         console.error('❌ [Resume] Không thể tạo recognizer mới:', err);
         if (onErrorRef.current) onErrorRef.current('Không thể bật lại mic: ' + err.message);
@@ -508,7 +693,7 @@ export default function useRealtimeConversation({
       setActiveLang(null);
       if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
     }
-  }, [setupRecognizer]);
+  }, [setupRecognizer, setupElevenLabsSTT]);
 
   // ====== Start(inputLang) — entry point ======
   const start = useCallback(async (inputLang) => {
@@ -533,9 +718,13 @@ export default function useRealtimeConversation({
       }, 1000);
       if (onStatusChangeRef.current) onStatusChangeRef.current('connecting');
 
-      // Tạo recognizer (dùng hàm chung)
-      await setupRecognizer(inputLang);
-      console.log('⏳ [Azure STT] Recognition started, waiting for session...');
+      // Tạo STT (dùng hàm tương ứng với provider)
+      if (providerRef.current === 'elevenlabs') {
+        await setupElevenLabsSTT(inputLang);
+      } else {
+        await setupRecognizer(inputLang);
+      }
+      console.log('\u23F3 [STT] Started, waiting for session...');
 
     } catch (err) {
       console.error('❌ [Start]', err);
@@ -543,7 +732,7 @@ export default function useRealtimeConversation({
       wantListeningRef.current = false;
       setIsListening(false);
     }
-  }, [setupRecognizer]);
+  }, [setupRecognizer, setupElevenLabsSTT]);
 
   // ====== Stop ======
   const stop = useCallback(async () => {
@@ -552,13 +741,32 @@ export default function useRealtimeConversation({
     clearTimeout(silenceTimeoutRef.current);
     clearInterval(elapsedTimerRef.current);
 
-    // Stop + close Azure recognizer hoàn toàn
-    if (recognizerRef.current) {
-      try {
-        await recognizerRef.current.stopContinuousRecognitionAsync();
-        recognizerRef.current.close();
-      } catch (e) { console.warn('⚠️ [Stop close]', e); }
-      recognizerRef.current = null;
+    // Stop + close STT
+    if (providerRef.current === 'elevenlabs') {
+      if (elWsRef.current) {
+        try { elWsRef.current.close(); } catch (e) { /* ignore */ }
+        elWsRef.current = null;
+      }
+      if (elMediaRef.current) {
+        try {
+          elMediaRef.current.processor?.disconnect();
+          elMediaRef.current.source?.disconnect();
+          elMediaRef.current.audioContext?.close();
+        } catch (e) { /* ignore */ }
+        elMediaRef.current = null;
+      }
+      if (elStreamRef.current) {
+        try { elStreamRef.current.getTracks().forEach(t => t.stop()); } catch (e) { /* ignore */ }
+        elStreamRef.current = null;
+      }
+    } else {
+      if (recognizerRef.current) {
+        try {
+          await recognizerRef.current.stopContinuousRecognitionAsync();
+          recognizerRef.current.close();
+        } catch (e) { console.warn('\u26A0\uFE0F [Stop close]', e); }
+        recognizerRef.current = null;
+      }
     }
 
     setIsListening(false);
@@ -579,13 +787,32 @@ export default function useRealtimeConversation({
     console.log('🛑 [Hold] User thả tay → dừng mic + dịch');
     clearTimeout(silenceTimeoutRef.current);
 
-    // Đóng recognizer ngay
-    if (recognizerRef.current) {
-      try {
-        await recognizerRef.current.stopContinuousRecognitionAsync();
-        recognizerRef.current.close();
-      } catch (e) { console.warn('⚠️ [StopHold close]', e); }
-      recognizerRef.current = null;
+    // Đóng STT ngay
+    if (providerRef.current === 'elevenlabs') {
+      if (elWsRef.current) {
+        try { elWsRef.current.close(); } catch (e) { /* ignore */ }
+        elWsRef.current = null;
+      }
+      if (elMediaRef.current) {
+        try {
+          elMediaRef.current.processor?.disconnect();
+          elMediaRef.current.source?.disconnect();
+          elMediaRef.current.audioContext?.close();
+        } catch (e) { /* ignore */ }
+        elMediaRef.current = null;
+      }
+      if (elStreamRef.current) {
+        try { elStreamRef.current.getTracks().forEach(t => t.stop()); } catch (e) { /* ignore */ }
+        elStreamRef.current = null;
+      }
+    } else {
+      if (recognizerRef.current) {
+        try {
+          await recognizerRef.current.stopContinuousRecognitionAsync();
+          recognizerRef.current.close();
+        } catch (e) { console.warn('\u26A0\uFE0F [StopHold close]', e); }
+        recognizerRef.current = null;
+      }
     }
 
     // Nếu có text → dịch ngay
@@ -626,8 +853,25 @@ export default function useRealtimeConversation({
         currentAudioRef.current = null;
       }
       if (recognizerRef.current) {
-        try { recognizerRef.current.close(); } catch (e) { console.warn('⚠️ [Cleanup]', e); }
+        try { recognizerRef.current.close(); } catch (e) { console.warn('\u26A0\uFE0F [Cleanup]', e); }
         recognizerRef.current = null;
+      }
+      // Cleanup ElevenLabs
+      if (elWsRef.current) {
+        try { elWsRef.current.close(); } catch (e) { /* ignore */ }
+        elWsRef.current = null;
+      }
+      if (elMediaRef.current) {
+        try {
+          elMediaRef.current.processor?.disconnect();
+          elMediaRef.current.source?.disconnect();
+          elMediaRef.current.audioContext?.close();
+        } catch (e) { /* ignore */ }
+        elMediaRef.current = null;
+      }
+      if (elStreamRef.current) {
+        try { elStreamRef.current.getTracks().forEach(t => t.stop()); } catch (e) { /* ignore */ }
+        elStreamRef.current = null;
       }
     };
   }, []);

@@ -7,6 +7,54 @@ const DEFAULT_VOICES = {
   ko: 'ko-KR-SunHiNeural',
 };
 
+const ELEVENLABS_DEFAULT_VOICES = {
+  zh: 'pFZP5JQG7iQjIQuC4Bku', // Lily
+  vi: 'pFZP5JQG7iQjIQuC4Bku', // Lily
+  en: '21m00Tcm4TlvDq8ikWAM', // Rachel
+  ja: 'pFZP5JQG7iQjIQuC4Bku', // Lily
+  ko: 'pFZP5JQG7iQjIQuC4Bku', // Lily
+};
+
+// Public default voices from ElevenLabs premade list, used as free-plan-safe fallbacks.
+const ELEVENLABS_FREE_FALLBACK_VOICE_MALE = 'JBFqnCBsd6RMkjVDRZzb';    // George
+const ELEVENLABS_FREE_FALLBACK_VOICE_FEMALE = '21m00Tcm4TlvDq8ikWAM';  // Rachel
+const ELEVENLABS_BLOCKED_LIBRARY_VOICES = new Set();
+
+const ELEVENLABS_FEMALE_VOICE_IDS = new Set([
+  'pFZP5JQG7iQjIQuC4Bku', // Lily
+  '21m00Tcm4TlvDq8ikWAM', // Rachel
+  'EXAVITQu4vr4xnSDxMaL', // Sarah
+  'cgSgspJ2msm6clMCkdW9', // Jessica
+  'XrExE9yKIg1WjnnlVkGX', // Matilda
+]);
+
+function pickFreeFallbackVoice(originalVoiceId) {
+  return ELEVENLABS_FEMALE_VOICE_IDS.has(originalVoiceId)
+    ? ELEVENLABS_FREE_FALLBACK_VOICE_FEMALE
+    : ELEVENLABS_FREE_FALLBACK_VOICE_MALE;
+}
+
+// Based on ElevenLabs docs: multilingual_v2 does not include Vietnamese, while flash_v2_5 does.
+const ELEVENLABS_MULTILINGUAL_V2_LANGS = new Set([
+  'ar', 'bg', 'cs', 'da', 'de', 'el', 'en', 'es', 'fi', 'fil', 'fr', 'hi',
+  'hr', 'id', 'it', 'ja', 'ko', 'ms', 'nl', 'pl', 'pt', 'ro', 'ru', 'sk',
+  'sv', 'ta', 'tr', 'uk', 'zh',
+]);
+
+function normalizeLangCode(lang) {
+  return (lang || 'en').toString().split('-')[0].toLowerCase();
+}
+
+function selectElevenLabsModel(lang) {
+  return ELEVENLABS_MULTILINGUAL_V2_LANGS.has(lang)
+    ? 'eleven_multilingual_v2'
+    : 'eleven_flash_v2_5';
+}
+
+function isLikelyElevenVoiceId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9]{20}$/.test(value.trim());
+}
+
 // Detect xml:lang from voice name or lang param
 function detectXmlLang(voiceName, lang) {
   if (voiceName) {
@@ -34,18 +82,19 @@ function escXml(text) {
     .replace(/'/g, '&apos;');
 }
 
-/**
- * Normalize text for more natural TTS reading:
- * - Clean up extra spaces/newlines
- * - Normalize common patterns (numbers, dates, etc.)
- */
 function normalizeText(text) {
   let t = text.trim();
   // Collapse multiple spaces/newlines
   t = t.replace(/\s+/g, ' ');
-  // Remove filler words
+
+  // Remove English filler words (standalone)
   t = t.replace(/\b(uh|um|er|erm)\b/gi, '');
-  t = t.replace(/(ừm|ờ|à ơi|ơ)\s*/gi, '');
+  
+  // Remove Vietnamese filler words ONLY when they are standalone words (bounded by spaces or punctuation)
+  // We use lookbehind and lookahead to simulate word boundaries for Vietnamese characters
+  t = t.replace(/(?<=^|\s|[.,!?])(ừm|ờ|à|ơi|ơ)(?=\s|[.,!?]|$)/gi, '');
+  
+  // Clean up any double spaces created by removals
   t = t.replace(/\s{2,}/g, ' ');
   return t.trim();
 }
@@ -167,75 +216,171 @@ function buildConversationalSSML(text, voiceName, lang) {
 
 export async function POST(request) {
   try {
-    const { text, lang, voice, voiceId } = await request.json();
+    const { text, lang, voice, voiceId, provider = 'azure' } = await request.json();
 
     if (!text || text.trim().length === 0) {
       return Response.json({ error: 'No text provided' }, { status: 400 });
     }
 
-    const azureKey = process.env.AZURE_SPEECH_KEY;
-    const azureRegion = process.env.AZURE_SPEECH_REGION;
-
-    if (!azureKey || !azureRegion) {
-      console.error('🔊 [Azure TTS] Missing AZURE_SPEECH_KEY or AZURE_SPEECH_REGION');
-      return Response.json(
-        { error: 'Azure Speech credentials not configured' },
-        { status: 500 }
-      );
+    // ========== ELEVENLABS TTS ==========
+    if (provider === 'elevenlabs') {
+      return await handleElevenLabsTTS(text, lang, voice || voiceId);
     }
 
-    // voiceId (from user request) > voice (from frontend) > default by lang
-    const selectedVoice = voiceId || voice || DEFAULT_VOICES[lang] || 'en-US-JennyNeural';
-    const baseLang = lang || selectedVoice.split('-')[0] || 'en';
+    // ========== AZURE TTS (default) ==========
+    return await handleAzureTTS(text, lang, voice, voiceId);
 
-    console.log(`🔊 [Azure TTS] voice=${selectedVoice}, lang=${baseLang}, text="${text.slice(0, 60)}..."`);
-
-    // Build conversational SSML
-    const { ssml, normalized } = buildConversationalSSML(text, selectedVoice, baseLang);
-    console.log(`🔊 [Azure TTS] SSML normalized="${normalized.slice(0, 60)}..."`);
-
-    // Call Azure TTS REST API
-    const endpoint = `https://${azureRegion}.tts.speech.microsoft.com/cognitiveservices/v1`;
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Ocp-Apim-Subscription-Key': azureKey,
-        'Content-Type': 'application/ssml+xml',
-        'X-Microsoft-OutputFormat': 'audio-16khz-32kbitrate-mono-mp3',
-        'User-Agent': 'VoiceTranslateAI',
-      },
-      body: ssml,
-      signal: AbortSignal.timeout(30000),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '');
-      console.error(`🔊 [Azure TTS] API error ${response.status}: ${errText}`);
-      console.error(`🔊 [Azure TTS] SSML sent:\n${ssml}`);
-      return Response.json(
-        { error: `Azure TTS error: ${response.status}` },
-        { status: response.status }
-      );
-    }
-
-    const audioBuffer = await response.arrayBuffer();
-    console.log(`🔊 [Azure TTS] Done: ${audioBuffer.byteLength} bytes`);
-
-    if (audioBuffer.byteLength === 0) {
-      console.error('🔊 [Azure TTS] ERROR: 0 bytes received');
-      return Response.json({ error: 'No audio data received' }, { status: 500 });
-    }
-
-    return new Response(audioBuffer, {
-      status: 200,
-      headers: {
-        'Content-Type': 'audio/mpeg',
-        'Content-Length': audioBuffer.byteLength.toString(),
-      },
-    });
   } catch (err) {
-    console.error('🔊 [Azure TTS] Error:', err);
+    console.error('🔊 [TTS] Error:', err);
     return Response.json({ error: err.message || 'TTS failed' }, { status: 500 });
   }
 }
+
+// ==================== AZURE TTS ====================
+async function handleAzureTTS(text, lang, voice, voiceId) {
+  const azureKey = process.env.AZURE_SPEECH_KEY;
+  const azureRegion = process.env.AZURE_SPEECH_REGION;
+
+  if (!azureKey || !azureRegion) {
+    console.error('🔊 [Azure TTS] Missing AZURE_SPEECH_KEY or AZURE_SPEECH_REGION');
+    return Response.json({ error: 'Azure Speech credentials not configured' }, { status: 500 });
+  }
+
+  const selectedVoice = voiceId || voice || DEFAULT_VOICES[lang] || 'en-US-JennyNeural';
+  const baseLang = lang || selectedVoice.split('-')[0] || 'en';
+
+  console.log(`🔊 [Azure TTS] voice=${selectedVoice}, lang=${baseLang}, text="${text.slice(0, 60)}..."`);
+
+  const { ssml, normalized } = buildConversationalSSML(text, selectedVoice, baseLang);
+  console.log(`🔊 [Azure TTS] SSML normalized="${normalized.slice(0, 60)}..."`);
+
+  const endpoint = `https://${azureRegion}.tts.speech.microsoft.com/cognitiveservices/v1`;
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Ocp-Apim-Subscription-Key': azureKey,
+      'Content-Type': 'application/ssml+xml',
+      'X-Microsoft-OutputFormat': 'audio-16khz-32kbitrate-mono-mp3',
+      'User-Agent': 'VoiceTranslateAI',
+    },
+    body: ssml,
+    signal: AbortSignal.timeout(30000),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    console.error(`🔊 [Azure TTS] API error ${response.status}: ${errText}`);
+    return Response.json({ error: `Azure TTS error: ${response.status}` }, { status: response.status });
+  }
+
+  const audioBuffer = await response.arrayBuffer();
+  console.log(`🔊 [Azure TTS] Done: ${audioBuffer.byteLength} bytes`);
+
+  if (audioBuffer.byteLength === 0) {
+    return Response.json({ error: 'No audio data received' }, { status: 500 });
+  }
+
+  return new Response(audioBuffer, {
+    status: 200,
+    headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': audioBuffer.byteLength.toString() },
+  });
+}
+
+// ==================== ELEVENLABS TTS ====================
+async function handleElevenLabsTTS(text, lang, voiceId) {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) {
+    console.error('[ElevenLabs TTS] Missing ELEVENLABS_API_KEY');
+    return Response.json({ error: 'ElevenLabs API key not configured' }, { status: 500 });
+  }
+
+  const normalizedLang = normalizeLangCode(lang);
+  const requestedVoice = (voiceId || '').toString().trim();
+  let selectedVoice = isLikelyElevenVoiceId(requestedVoice)
+    ? requestedVoice
+    : (ELEVENLABS_DEFAULT_VOICES[normalizedLang] || ELEVENLABS_DEFAULT_VOICES.en);
+  const selectedModel = selectElevenLabsModel(normalizedLang);
+
+  if (ELEVENLABS_BLOCKED_LIBRARY_VOICES.has(selectedVoice)) {
+    selectedVoice = pickFreeFallbackVoice(selectedVoice);
+  }
+
+  if (requestedVoice && !isLikelyElevenVoiceId(requestedVoice)) {
+    console.warn(`[ElevenLabs TTS] Invalid voice id "${requestedVoice}" -> fallback "${selectedVoice}"`);
+  }
+
+  console.log(`[ElevenLabs TTS] voice=${selectedVoice}, model=${selectedModel}, lang=${normalizedLang}, text="${text.slice(0, 60)}..."`);
+
+  const callTTS = async (voice) => {
+    const endpoint = `https://api.elevenlabs.io/v1/text-to-speech/${voice}?output_format=mp3_44100_128`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'xi-api-key': apiKey,
+        'Content-Type': 'application/json',
+        Accept: 'audio/mpeg',
+      },
+      body: JSON.stringify({
+        text,
+        model_id: selectedModel,
+        language_code: normalizedLang,
+        voice_settings: {
+          stability: 0.45,
+          similarity_boost: 0.78,
+          style: 0.35,
+          use_speaker_boost: true,
+        },
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    return response;
+  };
+
+  let response = await callTTS(selectedVoice);
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    const lowerErr = errText.toLowerCase();
+    const isLibraryVoicePlanError =
+      response.status === 402 &&
+      (lowerErr.includes('paid_plan_required') || lowerErr.includes('library voices'));
+
+    const retryVoice = pickFreeFallbackVoice(selectedVoice);
+    if (isLibraryVoicePlanError && selectedVoice !== retryVoice) {
+      ELEVENLABS_BLOCKED_LIBRARY_VOICES.add(selectedVoice);
+      console.warn(
+        `[ElevenLabs TTS] Voice "${selectedVoice}" requires paid plan, retry with fallback "${retryVoice}"`
+      );
+      response = await callTTS(retryVoice);
+    } else {
+      console.error(`[ElevenLabs TTS] API error ${response.status}: ${errText}`);
+      return Response.json(
+        { error: `ElevenLabs TTS error ${response.status}${errText ? `: ${errText}` : ''}` },
+        { status: response.status }
+      );
+    }
+  }
+
+  if (!response.ok) {
+    const retryErrText = await response.text().catch(() => '');
+    console.error(`[ElevenLabs TTS] Retry failed ${response.status}: ${retryErrText}`);
+    return Response.json(
+      { error: `ElevenLabs TTS error ${response.status}${retryErrText ? `: ${retryErrText}` : ''}` },
+      { status: response.status }
+    );
+  }
+
+  const audioBuffer = await response.arrayBuffer();
+  console.log(`[ElevenLabs TTS] Done: ${audioBuffer.byteLength} bytes`);
+
+  if (audioBuffer.byteLength === 0) {
+    return Response.json({ error: 'No audio data received' }, { status: 500 });
+  }
+
+  return new Response(audioBuffer, {
+    status: 200,
+    headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': audioBuffer.byteLength.toString() },
+  });
+}
+

@@ -3,7 +3,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import useRealtimeConversation from '@/hooks/useRealtimeConversation';
 
 // Voice options per language — Azure AI Speech (sorted best quality first)
-const VOICE_OPTIONS = {
+const VOICE_OPTIONS_AZURE = {
   vi: [
     { id: 'vi-VN-HoaiMyNeural', label: '⭐ Nữ miền Bắc (HoaiMy)' },
     { id: 'vi-VN-NamMinhNeural', label: '⭐ Nam miền Bắc (NamMinh)' },
@@ -44,6 +44,18 @@ const VOICE_OPTIONS = {
   ],
 };
 
+// Voice options — ElevenLabs (eleven_multilingual_v2 — all voices speak all languages)
+const VOICE_OPTIONS_ELEVENLABS = [
+  { id: 'pFZP5JQG7iQjIQuC4Bku', label: '⭐ Lily (Nữ, ấm áp)' },
+  { id: '21m00Tcm4TlvDq8ikWAM', label: '⭐ Rachel (Nữ, chuyên nghiệp)' },
+  { id: 'EXAVITQu4vr4xnSDxMaL', label: 'Sarah (Nữ, nhẹ nhàng)' },
+  { id: 'nPczCjzI2devNBz1zQrb', label: 'Brian (Nam, trầm)' },
+  { id: 'onwK4e9ZLuTAKqWW03F9', label: 'Daniel (Nam, mạnh mẽ)' },
+  { id: 'cgSgspJ2msm6clMCkdW9', label: 'Jessica (Nữ, vui vẻ)' },
+  { id: 'iP95p4xoKVk53GoZ742B', label: 'Chris (Nam, thân thiện)' },
+  { id: 'XrExE9yKIg1WjnnlVkGX', label: 'Matilda (Nữ, từ tốn)' },
+];
+
 /**
  * ConversationPanel — Redesigned as full-screen chat app
  *
@@ -79,8 +91,9 @@ export default function ConversationPanel({
   const [interimText, setInterimText] = useState('');
   
   const [silenceSeconds, setSilenceSeconds] = useState(() => getSessionValue('silenceSeconds', 4));
-  const [srcVoice, setSrcVoice] = useState(() => getSessionValue('srcVoice', VOICE_OPTIONS[srcLang.translateCode]?.[0]?.id || ''));
-  const [tgtVoice, setTgtVoice] = useState(() => getSessionValue('tgtVoice', VOICE_OPTIONS[tgtLang.translateCode]?.[0]?.id || ''));
+  const [provider, setProvider] = useState(() => getSessionValue('provider', 'azure'));
+  const [srcVoice, setSrcVoice] = useState(() => getSessionValue('srcVoice', VOICE_OPTIONS_AZURE[srcLang.translateCode]?.[0]?.id || ''));
+  const [tgtVoice, setTgtVoice] = useState(() => getSessionValue('tgtVoice', VOICE_OPTIONS_AZURE[tgtLang.translateCode]?.[0]?.id || ''));
   const [autoDetect, setAutoDetect] = useState(() => getSessionValue('autoDetect', false));
   const [micMode, setMicMode] = useState(() => getSessionValue('micMode', 'click'));
   const [autoTTS, setAutoTTS] = useState(() => getSessionValue('autoTTS', true));
@@ -98,6 +111,7 @@ export default function ConversationPanel({
   // Sync settings to sessionStorage
   useEffect(() => {
     try {
+      sessionStorage.setItem('vt_setting_provider', JSON.stringify(provider));
       sessionStorage.setItem('vt_setting_silenceSeconds', JSON.stringify(silenceSeconds));
       sessionStorage.setItem('vt_setting_srcVoice', JSON.stringify(srcVoice));
       sessionStorage.setItem('vt_setting_tgtVoice', JSON.stringify(tgtVoice));
@@ -108,7 +122,19 @@ export default function ConversationPanel({
       sessionStorage.setItem('vt_setting_muteSrc', JSON.stringify(muteSrc));
       sessionStorage.setItem('vt_setting_muteTgt', JSON.stringify(muteTgt));
     } catch { /* ignore */ }
-  }, [silenceSeconds, srcVoice, tgtVoice, autoDetect, micMode, autoTTS, fontSize, muteSrc, muteTgt]);
+  }, [provider, silenceSeconds, srcVoice, tgtVoice, autoDetect, micMode, autoTTS, fontSize, muteSrc, muteTgt]);
+
+  // Auto reset voices when provider changes
+  useEffect(() => {
+    if (provider === 'elevenlabs') {
+      setSrcVoice(VOICE_OPTIONS_ELEVENLABS[0]?.id || '');
+      setTgtVoice(VOICE_OPTIONS_ELEVENLABS[0]?.id || '');
+    } else {
+      setSrcVoice(VOICE_OPTIONS_AZURE[srcLang.translateCode]?.[0]?.id || '');
+      setTgtVoice(VOICE_OPTIONS_AZURE[tgtLang.translateCode]?.[0]?.id || '');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider]);
   const muteSrcRef = useRef(false);
   const muteTgtRef = useRef(false);
   useEffect(() => { muteSrcRef.current = muteSrc; }, [muteSrc]);
@@ -190,6 +216,7 @@ export default function ConversationPanel({
     autoDetect,
     micMode,
     autoTTS,
+    provider,
     onInterimText: handleInterimText,
     onFinalResult: handleFinalResult,
     onStatusChange: handleStatusChange,
@@ -220,7 +247,7 @@ export default function ConversationPanel({
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, lang: baseLang, voice }),
+        body: JSON.stringify({ text, lang: baseLang, voice, provider }),
       });
       if (!res.ok) { setReplayingId(null); return; }
       const blob = await res.blob();
@@ -234,7 +261,7 @@ export default function ConversationPanel({
       console.warn('Replay error:', err);
       setReplayingId(null);
     }
-  }, [replayingId, stopReplay, srcVoice, tgtVoice, srcLang.translateCode, tgtLang.translateCode]);
+  }, [replayingId, stopReplay, srcVoice, tgtVoice, srcLang.translateCode, tgtLang.translateCode, provider]);
 
   // Bấm nút mic
   const handleStartLang = useCallback((lang) => {
@@ -545,35 +572,71 @@ export default function ConversationPanel({
                 </div>
               </div>
 
+              {/* Provider selection */}
+              <div className="drawer-section">
+                <div className="drawer-section-title">🤖 Speech Provider</div>
+                <div className="drawer-row" style={{ gap: 6 }}>
+                  <label>API</label>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {[
+                      { key: 'azure', label: 'Azure', icon: '☁️' },
+                      { key: 'elevenlabs', label: 'ElevenLabs', icon: '🎭' },
+                    ].map(opt => (
+                      <button
+                        key={opt.key}
+                        onClick={() => !conv.isListening && setProvider(opt.key)}
+                        disabled={conv.isListening}
+                        style={{
+                          padding: '5px 14px', fontSize: '12px', fontWeight: 600,
+                          borderRadius: 8, cursor: conv.isListening ? 'not-allowed' : 'pointer',
+                          border: provider === opt.key ? '1.5px solid #8b5cf6' : '1px solid rgba(0,0,0,0.1)',
+                          background: provider === opt.key ? 'rgba(139,92,246,0.12)' : 'rgba(0,0,0,0.02)',
+                          color: provider === opt.key ? '#8b5cf6' : '#6b7280',
+                          opacity: conv.isListening ? 0.5 : 1,
+                          transition: 'all 0.15s',
+                        }}
+                      >{opt.icon} {opt.label}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
               {/* Voice selection */}
               <div className="drawer-section">
-                <div className="drawer-section-title">🔊 Giọng đọc</div>
-                <div className="drawer-row">
-                  <label>{srcLang.flag} {srcLang.name}</label>
-                  <select
-                    value={srcVoice}
-                    onChange={(e) => setSrcVoice(e.target.value)}
-                    disabled={conv.isListening}
-                    className="drawer-select"
-                  >
-                    {(VOICE_OPTIONS[srcLang.translateCode] || []).map(v => (
-                      <option key={v.id} value={v.id}>{v.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="drawer-row">
-                  <label>{tgtLang.flag} {tgtLang.name}</label>
-                  <select
-                    value={tgtVoice}
-                    onChange={(e) => setTgtVoice(e.target.value)}
-                    disabled={conv.isListening}
-                    className="drawer-select"
-                  >
-                    {(VOICE_OPTIONS[tgtLang.translateCode] || []).map(v => (
-                      <option key={v.id} value={v.id}>{v.label}</option>
-                    ))}
-                  </select>
-                </div>
+                <div className="drawer-section-title">🔊 Giọng đọc {provider === 'elevenlabs' ? '(ElevenLabs)' : '(Azure)'}</div>
+                {provider === 'elevenlabs' ? (
+                  /* ElevenLabs: same shared voice list for both languages (multilingual model) */
+                  <>
+                    <div className="drawer-row">
+                      <label>{srcLang.flag} Giọng {srcLang.name}</label>
+                      <select value={srcVoice} onChange={(e) => setSrcVoice(e.target.value)} disabled={conv.isListening} className="drawer-select">
+                        {VOICE_OPTIONS_ELEVENLABS.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                      </select>
+                    </div>
+                    <div className="drawer-row">
+                      <label>{tgtLang.flag} Giọng {tgtLang.name}</label>
+                      <select value={tgtVoice} onChange={(e) => setTgtVoice(e.target.value)} disabled={conv.isListening} className="drawer-select">
+                        {VOICE_OPTIONS_ELEVENLABS.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                      </select>
+                    </div>
+                  </>
+                ) : (
+                  /* Azure: language-specific voice lists */
+                  <>
+                    <div className="drawer-row">
+                      <label>{srcLang.flag} {srcLang.name}</label>
+                      <select value={srcVoice} onChange={(e) => setSrcVoice(e.target.value)} disabled={conv.isListening} className="drawer-select">
+                        {(VOICE_OPTIONS_AZURE[srcLang.translateCode] || []).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                      </select>
+                    </div>
+                    <div className="drawer-row">
+                      <label>{tgtLang.flag} {tgtLang.name}</label>
+                      <select value={tgtVoice} onChange={(e) => setTgtVoice(e.target.value)} disabled={conv.isListening} className="drawer-select">
+                        {(VOICE_OPTIONS_AZURE[tgtLang.translateCode] || []).map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                      </select>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Mic mode + toggles */}
