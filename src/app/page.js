@@ -41,6 +41,18 @@ export default function HomePage() {
   const [activeMic, setActiveMic] = useState(null);
   const activeMicRef = useRef(null);
   const [history, setHistory] = useState([]);
+  const [isHeaderHidden, setIsHeaderHidden] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try { return JSON.parse(sessionStorage.getItem('vt_setting_isHeaderHidden')) || false; }
+      catch { return false; }
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    try { sessionStorage.setItem('vt_setting_isHeaderHidden', JSON.stringify(isHeaderHidden)); } catch { /* ignore */ }
+  }, [isHeaderHidden]);
+
   const [convHistory, setConvHistory] = useState(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -282,7 +294,18 @@ export default function HomePage() {
       <div className="bg-orb bg-orb-2" />
       <div className="bg-orb bg-orb-3" />
       <div className={`container ${viewMode === 'conversation' ? 'container-conv' : ''}`}>
-        <header className="header">
+        <div style={{ display: 'flex', justifyContent: 'center', padding: isHeaderHidden ? '0 0 10px' : '0 0 5px' }}>
+          <button 
+             onClick={() => setIsHeaderHidden(!isHeaderHidden)}
+             title={isHeaderHidden ? "Hiện thanh Menu" : "Ẩn Menu để tối đa không gian"}
+             style={{ background: isHeaderHidden ? 'var(--card)' : 'transparent', border: isHeaderHidden ? '1px solid var(--border)' : 'none', borderRadius: '12px', padding: '2px 16px', fontSize: '13px', cursor: 'pointer', color: 'var(--text2)', boxShadow: isHeaderHidden ? '0 2px 6px rgba(0,0,0,0.06)' : 'none', transition: 'all 0.2s', zIndex: 10 }}>
+             {isHeaderHidden ? '🔽 Hiện thanh Menu' : '🔼 Ẩn thanh Menu'}
+          </button>
+        </div>
+        
+        {!isHeaderHidden && (
+          <>
+            <header className="header">
           <div className="logo">
             <span className="logo-icon">🎙</span>
             <h1>VoiceTranslate <sup className="badge">AI</sup></h1>
@@ -345,6 +368,8 @@ export default function HomePage() {
               </select>
             </div>
           </div>
+        )}
+          </>
         )}
 
         {viewMode === 'conversation' ? conversationView : (
