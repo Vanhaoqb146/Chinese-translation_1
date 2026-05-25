@@ -5,6 +5,7 @@ import useTranslation from '@/hooks/useTranslation';
 import ConversationPanel from '@/components/ConversationPanel';
 import LoginForm from '@/components/LoginForm';
 import ChangePasswordModal from '@/components/ChangePasswordModal';
+import { TRANSLATION_MODELS, DEFAULT_TRANSLATION_MODEL, normalizeTranslationModel } from '@/lib/translationModels';
 
 const LANGUAGES = [
   { flag: '🇨🇳', name: '中文', sttCode: 'zh-CN', translateCode: 'zh', ttsCode: 'zh-CN' },
@@ -32,7 +33,7 @@ export default function HomePage() {
   const [viewMode, setViewMode] = useState('standard');
   const [srcIdx, setSrcIdx] = useState(0);
   const [tgtIdx, setTgtIdx] = useState(1);
-  const [engine, setEngine] = useState('openai');
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_TRANSLATION_MODEL);
   const [apiKey, setApiKey] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [sourceBlocks, setSourceBlocks] = useState([]);
@@ -77,6 +78,17 @@ export default function HomePage() {
     setMounted(true);
     const savedUser = localStorage.getItem('vt_user');
     if (savedUser) setSessionUser(JSON.parse(savedUser));
+    
+    // Load saved settings
+    try {
+      const savedApiKey = localStorage.getItem('vt_setting_apiKey');
+      if (savedApiKey) setApiKey(savedApiKey);
+      const savedModel = localStorage.getItem('vt_setting_selectedModel');
+      if (savedModel) setSelectedModel(normalizeTranslationModel(savedModel));
+    } catch (e) {
+      console.warn('Failed to load settings from localStorage:', e);
+    }
+    
     setAuthChecked(true);
   }, []);
 
@@ -102,6 +114,17 @@ export default function HomePage() {
     setToast(msg);
     setTimeout(() => setToast(''), 3000);
   }, []);
+
+  const handleSaveSettings = () => {
+    try {
+      localStorage.setItem('vt_setting_apiKey', apiKey);
+      localStorage.setItem('vt_setting_selectedModel', selectedModel);
+      showToast('💾 Đã lưu cấu hình thành công');
+      setShowSettings(false);
+    } catch (e) {
+      showToast('❌ Không thể lưu cấu hình');
+    }
+  };
 
   const srcLang = LANGUAGES[srcIdx];
   const tgtLang = LANGUAGES[tgtIdx];
@@ -177,7 +200,7 @@ export default function HomePage() {
 
     if (panel === 'source') {
       setSourceBlocks(prev => [...prev, { text: cleanText, type: 'final', id: Date.now() }]);
-      queueTranslation(cleanText, LANGUAGES[srcIdx].translateCode, LANGUAGES[tgtIdx].translateCode, { apiKey, engine },
+      queueTranslation(cleanText, LANGUAGES[srcIdx].translateCode, LANGUAGES[tgtIdx].translateCode, { apiKey, engine: selectedModel },
         async (origText, translated) => {
           setTargetBlocks(prev => [...prev, { text: translated, type: 'final', id: Date.now() }]);
           // Lưu lịch sử dịch
@@ -189,7 +212,7 @@ export default function HomePage() {
         });
     } else {
       setTargetBlocks(prev => [...prev, { text: cleanText, type: 'final', id: Date.now() }]);
-      queueTranslation(cleanText, LANGUAGES[tgtIdx].translateCode, LANGUAGES[srcIdx].translateCode, { apiKey, engine },
+      queueTranslation(cleanText, LANGUAGES[tgtIdx].translateCode, LANGUAGES[srcIdx].translateCode, { apiKey, engine: selectedModel },
         async (origText, translated) => {
           setSourceBlocks(prev => [...prev, { text: translated, type: 'final', id: Date.now() }]);
           // Lưu lịch sử dịch
@@ -200,7 +223,7 @@ export default function HomePage() {
           await speak(translated, LANGUAGES[srcIdx].ttsCode);
         });
     }
-  }, [srcIdx, tgtIdx, apiKey, engine, queueTranslation]);
+  }, [srcIdx, tgtIdx, apiKey, selectedModel, queueTranslation]);
 
   const handleFinalResultSource = useCallback((t) => handleFinalResult(t, 'source'), [handleFinalResult]);
 
@@ -276,7 +299,7 @@ export default function HomePage() {
   const conversationView = (
     <ConversationPanel
       apiKey={apiKey}
-      engine={engine}
+      model={selectedModel}
       srcLang={srcLang}
       tgtLang={tgtLang}
       speak={speak}
@@ -349,10 +372,11 @@ export default function HomePage() {
               <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="Để trống nếu dùng env var" />
             </div>
             <div className="setting-row">
-              <label>🤖 Engine</label>
-              <select value={engine} onChange={(e) => setEngine(e.target.value)}>
-                <option value="openai">OpenAI GPT-4o-mini</option>
-                <option value="deepseek">DeepSeek</option>
+              <label>🤖 Model dịch</label>
+              <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)}>
+                {TRANSLATION_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label}</option>
+                ))}
               </select>
             </div>
             <div className="setting-row">
@@ -366,6 +390,27 @@ export default function HomePage() {
               <select value={tgtIdx} onChange={(e) => setTgtIdx(Number(e.target.value))}>
                 {LANGUAGES.map((l, i) => <option key={i} value={i}>{l.flag} {l.name}</option>)}
               </select>
+            </div>
+            <div className="setting-row" style={{ marginTop: '10px' }}>
+              <button 
+                onClick={handleSaveSettings}
+                style={{ 
+                  width: '100%', 
+                  padding: '8px', 
+                  background: 'var(--primary, #0ea5e9)', 
+                  color: '#fff', 
+                  border: 'none', 
+                  borderRadius: '8px', 
+                  cursor: 'pointer', 
+                  fontWeight: 'bold',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px'
+                }}
+              >
+                💾 Lưu cài đặt
+              </button>
             </div>
           </div>
         )}

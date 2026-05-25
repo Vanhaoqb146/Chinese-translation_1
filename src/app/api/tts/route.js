@@ -238,8 +238,8 @@ export async function POST(request) {
 
 // ==================== AZURE TTS ====================
 async function handleAzureTTS(text, lang, voice, voiceId) {
-  const azureKey = process.env.AZURE_SPEECH_KEY;
-  const azureRegion = process.env.AZURE_SPEECH_REGION;
+  const azureKey = (process.env.AZURE_SPEECH_KEY || '').replace(/['"]/g, '').trim();
+  const azureRegion = (process.env.AZURE_SPEECH_REGION || '').replace(/['"]/g, '').trim();
 
   if (!azureKey || !azureRegion) {
     console.error('🔊 [Azure TTS] Missing AZURE_SPEECH_KEY or AZURE_SPEECH_REGION');
@@ -289,7 +289,7 @@ async function handleAzureTTS(text, lang, voice, voiceId) {
 
 // ==================== ELEVENLABS TTS ====================
 async function handleElevenLabsTTS(text, lang, voiceId) {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
+  const apiKey = (process.env.ELEVENLABS_API_KEY || '').replace(/['"]/g, '').trim();
   if (!apiKey) {
     console.error('[ElevenLabs TTS] Missing ELEVENLABS_API_KEY');
     return Response.json({ error: 'ElevenLabs API key not configured' }, { status: 500 });

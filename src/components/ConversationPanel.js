@@ -67,7 +67,7 @@ const VOICE_OPTIONS_ELEVENLABS = [
  */
 export default function ConversationPanel({
   apiKey,
-  engine,
+  model,
   srcLang,
   tgtLang,
   speak,
@@ -211,7 +211,7 @@ export default function ConversationPanel({
   const conv = useRealtimeConversation({
     srcLangCode: srcLang.translateCode,
     tgtLangCode: tgtLang.translateCode,
-    engine,
+    engine: model,
     silenceMs: silenceSeconds * 1000,
     autoDetect,
     micMode,

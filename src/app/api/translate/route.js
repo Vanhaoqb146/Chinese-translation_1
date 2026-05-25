@@ -19,11 +19,15 @@ export async function POST(request) {
 
     // Try LLM first (OpenAI or DeepSeek)
     if (apiKey) {
-      const configs = {
-        openai: { url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o' },
-        deepseek: { url: 'https://api.deepseek.com/v1/chat/completions', model: 'deepseek-chat' },
-      };
-      const cfg = configs[engine] || configs.openai;
+      // Map engine/model dynamically
+      let cfg = { url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o' };
+      if (engine === 'deepseek') {
+        cfg = { url: 'https://api.deepseek.com/v1/chat/completions', model: 'deepseek-chat' };
+      } else if (engine === 'gpt-5.4-mini' || engine === 'gpt-5.4-nano') {
+        cfg = { url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' };
+      } else if (engine === 'gpt-5.4') {
+        cfg = { url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o' };
+      }
 
       // [FIX BUG 2] STRICT TRANSLATION-ONLY SYSTEM PROMPT
       // Sử dụng tiếng Anh, cực kỳ rõ ràng, cấm GPT trả lời câu hỏi hoặc nói chuyện

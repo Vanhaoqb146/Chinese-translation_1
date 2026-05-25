@@ -3,7 +3,7 @@
  * GET → trả về { token } cho Scribe v2 realtime STT
  */
 export async function GET() {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
+  const apiKey = (process.env.ELEVENLABS_API_KEY || '').replace(/['"]/g, '').trim();
   if (!apiKey) {
     return Response.json({ error: 'ELEVENLABS_API_KEY not configured' }, { status: 500 });
   }

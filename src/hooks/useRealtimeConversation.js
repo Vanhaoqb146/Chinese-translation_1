@@ -75,6 +75,7 @@ export default function useRealtimeConversation({
   const accumulatedTextRef = useRef('');
   const currentInterimRef = useRef('');
   const silenceTimeoutRef = useRef(null);
+  const stoppingRef = useRef(false); // Cờ chặn tin nhắn WebSocket muộn khi bấm dừng
 
   const conversationHistoryRef = useRef([]);
   const msgIdRef = useRef(Date.now());
@@ -368,6 +369,7 @@ export default function useRealtimeConversation({
 
     ws.onmessage = (event) => {
       if (isSpeakingRef.current) return;
+      if (stoppingRef.current) return; // Bỏ qua tin nhắn đến sau khi user bấm dừng
       try {
         const data = JSON.parse(event.data);
         const messageType = data.message_type || data.type;
@@ -444,15 +446,48 @@ export default function useRealtimeConversation({
     }
     if (!text) return;
 
+    // Lọc bỏ từ ừm, à, ờ dư thừa ở cuối hoặc đứng độc lập do tiếng thở/nhiễu
+    text = text.replace(/(?<=^|\s|[.,!?])(ừm|ờ|à|ơi|ơ)(?=\s|[.,!?]|$)/gi, '');
+    text = text.replace(/\b(uh|um|er|erm)\b/gi, '');
+    text = text.replace(/\s+/g, ' ').trim();
+    if (!text) return;
+
     // [FIX] Lọc nhiễu — Azure STT hay bắt được 'phẩy', 'chấm' khi mic ngắt vội
-    const noiseWords = ['phẩy.', 'chấm.', 'phẩy', 'chấm', 'hỏi.', 'hỏi', 'comma', 'period', 'dot'];
+    const noiseWords = ['phẩy.', 'chấm.', 'phẩy', 'chấm', 'hỏi.', 'hỏi', 'comma', 'period', 'dot',
+      'the first', 'the', 'first', 'thank you', 'thanks', 'bye', 'okay', 'ok',
+      'yes', 'no', 'hello', 'hi', 'hey', 'so', 'and', 'but', 'or',
+      'one', 'two', 'three', 'i', 'you', 'it', 'a', 'is', 'this', 'that',
+      'right', 'well', 'just', 'like', 'good', 'not', 'what', 'do', 'can',
+      'please', 'sorry', 'see', 'go', 'get', 'let', 'here', 'there',
+      'my', 'your', 'we', 'they', 'he', 'she', 'me', 'us', 'them',
+    ];
     const cleanLower = text.replace(/[.,!?;:]+$/g, '').trim().toLowerCase();
+
+    // [FIX] Bộ lọc nhiễu ngôn ngữ: nếu đang nói tiếng Trung/Việt/Nhật/Hàn
+    // mà text chỉ toàn chữ Latin ngắn (≤4 từ) → chắc chắn là nhiễu micro
+    const isPureEnglish = /^[a-zA-Z0-9\s.,!?'"\-:;()]+$/.test(text.trim());
+    const wordCount = text.trim().split(/\s+/).length;
+    const wasNotSpeakingEnglish = inputLangRef.current !== 'en';
+    if (isPureEnglish && wordCount <= 4 && wasNotSpeakingEnglish) {
+      console.log(`🚫 [Noise] English noise while speaking ${inputLangRef.current}: "${text}"`);
+      accumulatedTextRef.current = '';
+      currentInterimRef.current = '';
+      if (onInterimTextRef.current) onInterimTextRef.current('');
+      if (micModeRef.current === 'hold') {
+        wantListeningRef.current = false;
+        clearInterval(elapsedTimerRef.current);
+        setIsListening(false);
+        setActiveLang(null);
+        if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
+      }
+      return;
+    }
+
     if (noiseWords.includes(cleanLower) || /^[.,!?;:\s]+$/.test(text)) {
       console.log(`🚫 [Noise] Bỏ qua text nhiễu: "${text}"`);
       accumulatedTextRef.current = '';
       currentInterimRef.current = '';
       if (onInterimTextRef.current) onInterimTextRef.current('');
-      // Nếu đang hold mode → về idle; nếu không → để silence timer flow tự xử lý
       if (micModeRef.current === 'hold') {
         wantListeningRef.current = false;
         clearInterval(elapsedTimerRef.current);
@@ -746,6 +781,7 @@ export default function useRealtimeConversation({
       accumulatedTextRef.current = '';
       currentInterimRef.current = '';
       isSpeakingRef.current = false;
+      stoppingRef.current = false; // Reset cờ dừng khi bắt đầu phiên mới
       inputLangRef.current = inputLang;
       conversationHistoryRef.current = [];
       msgIdRef.current = Date.now();
@@ -785,6 +821,7 @@ export default function useRealtimeConversation({
   // ====== Stop ======
   const stop = useCallback(async () => {
     console.log('🛑 Stop');
+    stoppingRef.current = true; // Đánh dấu đang dừng → chặn tin nhắn WebSocket muộn
     wantListeningRef.current = false;
     clearTimeout(silenceTimeoutRef.current);
     clearInterval(elapsedTimerRef.current);
