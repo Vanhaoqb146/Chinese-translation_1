@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "update-skill": "node scripts/update-skill.js"
   },
   "dependencies": {
     "@vercel/postgres": "^0.10.0",

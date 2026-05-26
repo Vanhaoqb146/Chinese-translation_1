@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import useSpeechRecognition from '@/hooks/useSpeechRecognition';
 import useTranslation from '@/hooks/useTranslation';
 import ConversationPanel from '@/components/ConversationPanel';
+import SimultaneousPanel from '@/components/SimultaneousPanel';
 import LoginForm from '@/components/LoginForm';
 import ChangePasswordModal from '@/components/ChangePasswordModal';
 import { TRANSLATION_MODELS, DEFAULT_TRANSLATION_MODEL, normalizeTranslationModel } from '@/lib/translationModels';
@@ -64,6 +65,21 @@ export default function HomePage() {
     return [];
   });
 
+  const [simHistory, setSimHistory] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = sessionStorage.getItem('vt_sim_history');
+        return saved ? JSON.parse(saved) : [];
+      } catch { return []; }
+    }
+    return [];
+  });
+
+  // Sync simHistory → sessionStorage
+  useEffect(() => {
+    try { sessionStorage.setItem('vt_sim_history', JSON.stringify(simHistory)); } catch { /* ignore */ }
+  }, [simHistory]);
+
   useEffect(() => { activeMicRef.current = activeMic; }, [activeMic]);
   const [toast, setToast] = useState('');
 
@@ -106,6 +122,7 @@ export default function HomePage() {
     setSessionUser(null);
     localStorage.removeItem('vt_user');
     sessionStorage.removeItem('vt_conv_history');
+    sessionStorage.removeItem('vt_sim_history');
   };
 
   // Load voices — removed (using Edge TTS API now)
@@ -311,12 +328,28 @@ export default function HomePage() {
     />
   );
 
+  // =============== SIMULTANEOUS MODE ===============
+  const simultaneousView = (
+    <SimultaneousPanel
+      apiKey={apiKey}
+      model={selectedModel}
+      srcLang={srcLang}
+      tgtLang={tgtLang}
+      speak={speak}
+      findSttCode={findSttCode}
+      LANGUAGES={LANGUAGES}
+      history={simHistory}
+      setHistory={setSimHistory}
+      sessionUser={sessionUser}
+    />
+  );
+
   return (
     <div className="app">
       <div className="bg-orb bg-orb-1" />
       <div className="bg-orb bg-orb-2" />
       <div className="bg-orb bg-orb-3" />
-      <div className={`container ${viewMode === 'conversation' ? 'container-conv' : ''}`}>
+      <div className={`container ${viewMode === 'conversation' || viewMode === 'simultaneous' ? 'container-conv' : ''}`}>
         <div style={{ display: 'flex', justifyContent: 'center', padding: isHeaderHidden ? '0 0 10px' : '0 0 5px' }}>
           <button 
              onClick={() => setIsHeaderHidden(!isHeaderHidden)}
@@ -336,6 +369,7 @@ export default function HomePage() {
           <div className="mode-switcher">
             <button className={viewMode === 'standard' ? 'active' : ''} onClick={() => setViewMode('standard')}>📋 Dịch thuật</button>
             <button className={viewMode === 'conversation' ? 'active' : ''} onClick={() => setViewMode('conversation')}>💬 Giao tiếp</button>
+            <button className={viewMode === 'simultaneous' ? 'active' : ''} onClick={() => setViewMode('simultaneous')}>🎙️ Dịch song song</button>
           </div>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             {sessionUser && (
@@ -417,7 +451,8 @@ export default function HomePage() {
           </>
         )}
 
-        {viewMode === 'conversation' ? conversationView : (
+        {viewMode === 'conversation' ? conversationView :
+         viewMode === 'simultaneous' ? simultaneousView : (
           <>
             <div className="lang-bar">
               <span className="lang-chip"><span className="flag">{srcLang.flag}</span>{srcLang.name}</span>
@@ -495,7 +530,7 @@ export default function HomePage() {
           </>
         )}
 
-        {viewMode !== 'conversation' && <footer className="footer"> Ứng dụng dịch thuật thông minh </footer>}
+        {viewMode !== 'conversation' && viewMode !== 'simultaneous' && <footer className="footer"> Ứng dụng dịch thuật thông minh </footer>}
       </div>
 
       {toast && <div className="toast">{toast}</div>}

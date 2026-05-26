@@ -1,0 +1,27 @@
+
+> nextjs-app@0.1.0 dev
+> next dev
+
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.65:3000
+- Environments: .env.local
+
+✓ Starting...
+Creating turbopack project { dir: 'D:\\1.PROJECT\\Chinese-translation_1', testMode: true }
+✓ Ready in 518ms
+ HEAD / 200 in 301ms (compile: 204ms, render: 98ms)
+ GET / 200 in 292ms (compile: 211ms, render: 81ms)
+ HEAD / 200 in 172ms (compile: 97ms, render: 75ms)
+ GET / 200 in 50ms (compile: 14ms, render: 36ms)
+ POST /api/translate 200 in 1437ms (compile: 58ms, render: 1378ms)
+🔊 [Azure TTS] voice=zh-CN-XiaoxiaoMultilingualNeural, lang=zh, text="儿子。..."
+🔊 [Azure TTS] SSML normalized="儿子。..."
+🔊 [Azure TTS] Done: 5904 bytes
+ POST /api/tts 200 in 782ms (compile: 30ms, render: 752ms)
+ POST /api/translate 200 in 772ms (compile: 3ms, render: 769ms)
+🔊 [Azure TTS] voice=zh-CN-XiaoxiaoMultilingualNeural, lang=zh, text="丈夫。..."
+🔊 [Azure TTS] SSML normalized="丈夫。..."
+🔊 [Azure TTS] Done: 6048 bytes
+ POST /api/tts 200 in 628ms (compile: 13ms, render: 615ms)
+[?25h
