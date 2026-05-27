@@ -34,6 +34,36 @@ function detectLangFromText(text) {
   return null;
 }
 
+function getSimilarityRatio(str1, str2) {
+  if (!str1 || !str2) return 0;
+  // Chuẩn hóa chuỗi: chuyển thành chữ thường, loại bỏ khoảng trắng và các ký tự đặc biệt
+  const s1 = str1.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").replace(/\s+/g, "").trim();
+  const s2 = str2.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").replace(/\s+/g, "").trim();
+  if (s1 === s2) return 1.0;
+
+  const len1 = s1.length;
+  const len2 = s2.length;
+  if (len1 === 0 || len2 === 0) return 0;
+
+  // Thuật toán Levenshtein Distance
+  const track = Array(len2 + 1).fill(null).map(() => Array(len1 + 1).fill(null));
+  for (let i = 0; i <= len1; i += 1) track[0][i] = i;
+  for (let j = 0; j <= len2; j += 1) track[j][0] = j;
+  for (let j = 1; j <= len2; j += 1) {
+    for (let i = 1; i <= len1; i += 1) {
+      const indicator = s1[i - 1] === s2[j - 1] ? 0 : 1;
+      track[j][i] = Math.min(
+        track[j][i - 1] + 1, // deletion
+        track[j - 1][i] + 1, // insertion
+        track[j - 1][i - 1] + indicator // substitution
+      );
+    }
+  }
+  const distance = track[len2][len1];
+  const maxLen = Math.max(len1, len2);
+  return (maxLen - distance) / maxLen;
+}
+
 export default function useSimultaneousConversation({
   srcLangCode,
   tgtLangCode,
@@ -42,8 +72,11 @@ export default function useSimultaneousConversation({
   autoDetect = false,
   micMode = 'continuous', // 'continuous' | 'hold'
   autoTTS = true,
-  provider = 'azure', // 'azure' | 'elevenlabs'
+  provider = 'azure', // 'azure' | 'elevenlabs' | 'web-speech'
+  ttsProvider = 'azure', // 'azure' | 'elevenlabs'
   overlapListening = false, // Headphones mode: microphone remains active during TTS playback
+  speed = 1.0,              // Tốc độ phát giọng nói
+  echoCancellationAI = false,
   onInterimText,
   onFinalResult,
   onStatusChange,
@@ -70,6 +103,16 @@ export default function useSimultaneousConversation({
   const elMediaRef = useRef(null);
   const elStreamRef = useRef(null);
   const azureStreamRef = useRef(null);
+  const bgStreamRef = useRef(null);
+
+  // WebSpeech-specific refs
+  const webSpeechRecRef = useRef(null);
+  const isWebSpeechFinalFiredRef = useRef(false);
+  const webSpeechPendingResolveRef = useRef(null);
+  const lastQueuedTextRef = useRef('');
+  const lastRobotSpokenTextRef = useRef('');
+  const isMicRunningRef = useRef(false);
+  const userSpokeDuringTtsRef = useRef(false);
 
   const accumulatedTextRef = useRef('');
   const currentInterimRef = useRef('');
@@ -97,24 +140,29 @@ export default function useSimultaneousConversation({
   const micModeRef = useRef(micMode);
   const autoTTSRef = useRef(autoTTS);
   const providerRef = useRef(provider);
+  const ttsProviderRef = useRef(ttsProvider);
   const overlapListeningRef = useRef(overlapListening);
+  const speedRef = useRef(speed);
+  const echoCancellationAIRef = useRef(echoCancellationAI);
 
-  useEffect(() => {
-    srcLangCodeRef.current = srcLangCode;
-    tgtLangCodeRef.current = tgtLangCode;
-    onFinalResultRef.current = onFinalResult;
-    onStatusChangeRef.current = onStatusChange;
-    onErrorRef.current = onError;
-    onInterimTextRef.current = onInterimText;
-    engineRef.current = engine;
-    silenceMsRef.current = silenceMs;
-    getVoiceForLangRef.current = getVoiceForLang;
-    autoDetectRef.current = autoDetect;
-    micModeRef.current = micMode;
-    autoTTSRef.current = autoTTS;
-    providerRef.current = provider;
-    overlapListeningRef.current = overlapListening;
-  });
+  // Update refs synchronously during render to completely bypass React scheduling lags
+  srcLangCodeRef.current = srcLangCode;
+  tgtLangCodeRef.current = tgtLangCode;
+  onFinalResultRef.current = onFinalResult;
+  onStatusChangeRef.current = onStatusChange;
+  onErrorRef.current = onError;
+  onInterimTextRef.current = onInterimText;
+  engineRef.current = engine;
+  silenceMsRef.current = silenceMs;
+  getVoiceForLangRef.current = getVoiceForLang;
+  autoDetectRef.current = autoDetect;
+  micModeRef.current = micMode;
+  autoTTSRef.current = autoTTS;
+  providerRef.current = provider;
+  ttsProviderRef.current = ttsProvider;
+  overlapListeningRef.current = overlapListening;
+  speedRef.current = speed;
+  echoCancellationAIRef.current = echoCancellationAI;
 
   const getOrCreateTtsAudio = useCallback(() => {
     if (typeof window === 'undefined') return null;
@@ -135,6 +183,19 @@ export default function useSimultaneousConversation({
     if (!currentAudioUrlRef.current) return;
     try { URL.revokeObjectURL(currentAudioUrlRef.current); } catch (e) { /* ignore */ }
     currentAudioUrlRef.current = null;
+  }, []);
+
+  const duckTtsVolume = useCallback(() => {
+    if (currentAudioRef.current && isProcessingQueueRef.current) {
+      console.log('🔈 [Audio Ducking] Giảm âm lượng robot phát loa xuống 50% vì phát hiện người dùng đang nói');
+      currentAudioRef.current.volume = 0.50;
+    }
+  }, []);
+
+  const restoreTtsVolume = useCallback(() => {
+    if (currentAudioRef.current) {
+      currentAudioRef.current.volume = 1.0;
+    }
   }, []);
 
   // ====== Setup Speech Recognizers (Azure) ======
@@ -167,8 +228,8 @@ export default function useSimultaneousConversation({
       stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
-          noiseSuppression: false, // Tắt chống ồn phần mềm để tránh nghẹt/mất tiếng
-          autoGainControl: false   // Tắt AGC tránh tăng/giảm âm tự động gây biến dạng
+          noiseSuppression: true,
+          autoGainControl: true
         }
       });
       azureStreamRef.current = stream;
@@ -205,6 +266,11 @@ export default function useSimultaneousConversation({
       const transcript = e.result.text;
       if (!transcript) return;
 
+      if (isProcessingQueueRef.current) {
+        userSpokeDuringTtsRef.current = true;
+        duckTtsVolume();
+      }
+
       if (autoDetectRef.current) {
         try {
           const detectedLocale = e.result.properties?.getProperty?.(
@@ -232,6 +298,11 @@ export default function useSimultaneousConversation({
 
       const transcript = e.result.text;
       if (!transcript) return;
+
+      if (isProcessingQueueRef.current) {
+        userSpokeDuringTtsRef.current = true;
+        duckTtsVolume();
+      }
 
       if (autoDetectRef.current) {
         try {
@@ -296,8 +367,8 @@ export default function useSimultaneousConversation({
         sampleRate: { ideal: 16000 },
         channelCount: 1,
         echoCancellation: true,
-        noiseSuppression: false, // [TẮT] Chống ồn mặc định của Chrome làm nghẹt/mất phụ âm Tiếng Việt
-        autoGainControl: false   // [TẮT] Tự động tăng giảm âm lượng gây biến dạng sóng âm
+        noiseSuppression: true,
+        autoGainControl: true
       }
     });
     elStreamRef.current = stream;
@@ -355,6 +426,12 @@ export default function useSimultaneousConversation({
         if (messageType === 'partial_transcript') {
           const transcript = data.text || '';
           if (!transcript) return;
+
+          if (isProcessingQueueRef.current) {
+            userSpokeDuringTtsRef.current = true;
+            duckTtsVolume();
+          }
+
           currentInterimRef.current = transcript;
           const display = accumulatedTextRef.current + (accumulatedTextRef.current ? ' ' : '') + transcript;
           if (onInterimTextRef.current) onInterimTextRef.current(display);
@@ -363,6 +440,12 @@ export default function useSimultaneousConversation({
         if (messageType === 'committed_transcript') {
           const transcript = data.text || '';
           if (!transcript) return;
+
+          if (isProcessingQueueRef.current) {
+            userSpokeDuringTtsRef.current = true;
+            duckTtsVolume();
+          }
+
           accumulatedTextRef.current += (accumulatedTextRef.current ? ' ' : '') + transcript;
           currentInterimRef.current = '';
           if (onInterimTextRef.current) onInterimTextRef.current(accumulatedTextRef.current);
@@ -390,16 +473,195 @@ export default function useSimultaneousConversation({
     }, timeout);
   }, []);
 
+  // ====== Setup Web Speech API native ======
+  const setupWebSpeechRecognizer = useCallback((inputLang) => {
+    if (typeof window === 'undefined') return null;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      throw new Error('Trình duyệt không hỗ trợ Web Speech API.');
+    }
+
+    const rec = new SpeechRecognition();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+
+    const langMap = { zh: 'zh-CN', vi: 'vi-VN', en: 'en-US', ja: 'ja-JP', ko: 'ko-KR' };
+    rec.lang = langMap[inputLang] || inputLang;
+
+    rec.onstart = () => {
+      console.log('🟢 [Web Speech native] Session started');
+      isMicRunningRef.current = true;
+      if (onStatusChangeRef.current) onStatusChangeRef.current('listening');
+    };
+
+    rec.onresult = (e) => {
+      if (isSpeakingRef.current) return;
+      isWebSpeechFinalFiredRef.current = false;
+
+      // Đánh dấu người dùng đã nói trong lúc dịch/phát âm
+      if (isProcessingQueueRef.current) {
+        userSpokeDuringTtsRef.current = true;
+        duckTtsVolume();
+      }
+
+      let interim = '';
+      let final = '';
+
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const transcript = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          final += transcript + ' ';
+        } else {
+          interim += transcript;
+        }
+      }
+
+      if (final.trim()) {
+        accumulatedTextRef.current += (accumulatedTextRef.current ? ' ' : '') + final.trim();
+        currentInterimRef.current = '';
+        isWebSpeechFinalFiredRef.current = true;
+        
+        if (webSpeechPendingResolveRef.current) {
+          webSpeechPendingResolveRef.current();
+          webSpeechPendingResolveRef.current = null;
+        }
+      } else if (interim.trim()) {
+        currentInterimRef.current = interim.trim();
+      }
+
+      const display = accumulatedTextRef.current + (accumulatedTextRef.current && currentInterimRef.current ? ' ' : '') + currentInterimRef.current;
+      if (onInterimTextRef.current) onInterimTextRef.current(display);
+
+      resetSilenceTimer();
+    };
+
+    rec.onerror = (e) => {
+      if (e.error === 'no-speech' || e.error === 'aborted') return;
+      console.error(`❌ [Web Speech Lỗi]`, e.error);
+      if (onErrorRef.current) onErrorRef.current(`Micro: ${e.error}`);
+    };
+
+    rec.onend = () => {
+      console.log('🔴 [Web Speech native] Session stopped');
+      isMicRunningRef.current = false;
+      if (wantListeningRef.current && !isSpeakingRef.current && providerRef.current === 'web-speech') {
+        setTimeout(() => {
+          if (wantListeningRef.current && !isSpeakingRef.current && !isMicRunningRef.current) {
+            try {
+              setupWebSpeechRecognizer(inputLangRef.current);
+              console.log('🔄 [Web Speech native] Restarted safely after 150ms delay');
+            } catch (_) { /* ignore */ }
+          }
+        }, 150);
+      }
+    };
+
+    webSpeechRecRef.current = rec;
+    rec.start();
+    return rec;
+  }, [resetSilenceTimer]);
+
   // ====== QUEUE: Đẩy câu nói vào hàng đợi và tiếp tục ghi âm ======
   const queueTranslationTask = useCallback(() => {
     let text = accumulatedTextRef.current.trim();
+    const interim = currentInterimRef.current.trim();
+    if (interim) {
+      text = text ? text + ' ' + interim : interim;
+    }
     if (!text) return;
 
     // Lọc nhiễu & từ rác
     text = text.replace(/(?<=^|\s|[.,!?])(ừm|ờ|à|ơi|ơ)(?=\s|[.,!?]|$)/gi, '');
     text = text.replace(/\b(uh|um|er|erm)\b/gi, '');
-    text = text.replace(/\s+/g, ' ').trim();
     if (!text) return;
+
+    // Bộ lọc chống tạp âm click/nhiễu cực ngắn (Dạ, À, Ừ...) xuất hiện khi loa đang phát âm (TTS)
+    if (overlapListeningRef.current && isProcessingQueueRef.current) {
+      const cleanWord = text.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "").trim().toLowerCase();
+      const shortFillers = ['dạ', 'à', 'ừ', 'ồ', 'ok', 'yes', 'yeah', 'ah', 'oh', 'uh', 'um', 'hả', 'hử', 'nhé', 'thế'];
+      if (shortFillers.includes(cleanWord)) {
+        console.log(`🛡️ [AEC Noise Filter] Bỏ qua âm nhiễu cực ngắn "${text}" trong lúc máy đang phát loa.`);
+        accumulatedTextRef.current = '';
+        currentInterimRef.current = '';
+        if (onInterimTextRef.current) onInterimTextRef.current('');
+        
+        userSpokeDuringTtsRef.current = false;
+        
+        if (providerRef.current === 'web-speech' && webSpeechRecRef.current) {
+          try {
+            webSpeechRecRef.current.abort();
+          } catch (e) { /* ignore */ }
+        }
+        return;
+      }
+    }
+
+    // Bộ lọc chống vọng đồng âm xuyên ngôn ngữ (Cross-lingual Homophonic Echo Filter)
+    if (overlapListeningRef.current && lastQueuedTextRef.current) {
+      const wordsCurrent = text.toLowerCase().replace(/[.,!?;:]/g, '').trim().split(/\s+/).slice(0, 2);
+      const wordsPrev = lastQueuedTextRef.current.toLowerCase().replace(/[.,!?;:]/g, '').trim().split(/\s+/).slice(0, 2);
+      
+      if (wordsCurrent.length > 0 && wordsPrev.length > 0) {
+        const stripDiacritics = (str) => {
+          return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+        };
+        
+        const wCurr0 = stripDiacritics(wordsCurrent[0]);
+        const wPrev0 = stripDiacritics(wordsPrev[0]);
+        
+        // Độ tương đồng không dấu của từ đầu tiên (ví dụ: chú vs chúc)
+        const firstWordSimilarity = getSimilarityRatio(wCurr0, wPrev0);
+        console.log(`🛡️ [AI Homophone Check] So sánh âm từ đầu: "${wCurr0}" vs "${wPrev0}" (Độ tương đồng: ${(firstWordSimilarity * 100).toFixed(1)}%)`);
+        
+        if (firstWordSimilarity >= 0.70) {
+          console.log(`🚫 [AI Homophone Filter] Phát hiện tiếng vọng đồng âm từ câu trước ("${text.slice(0, 30)}..." vs "${lastQueuedTextRef.current.slice(0, 30)}..."), tự động BỎ QUA.`);
+          accumulatedTextRef.current = '';
+          currentInterimRef.current = '';
+          if (onInterimTextRef.current) onInterimTextRef.current('');
+          
+          userSpokeDuringTtsRef.current = false;
+          
+          if (providerRef.current === 'web-speech' && webSpeechRecRef.current) {
+            try {
+              webSpeechRecRef.current.abort();
+            } catch (e) { /* ignore */ }
+          }
+          return;
+        }
+      }
+    }
+
+    // Bộ lọc chống vọng AI (Thử nghiệm) bằng thuật toán so sánh chuỗi Levenshtein
+    if (echoCancellationAIRef.current && lastRobotSpokenTextRef.current) {
+      const similarity = getSimilarityRatio(text, lastRobotSpokenTextRef.current);
+      console.log(`🛡️ [AI Echo Check] Độ tương đồng với câu loa phát: ${(similarity * 100).toFixed(1)}% ("${text}" vs "${lastRobotSpokenTextRef.current}")`);
+      if (similarity > 0.70) {
+        console.log(`🚫 [AI Echo Filter] Phát hiện tiếng vọng dội lại từ loa ngoài (trùng ${(similarity * 100).toFixed(1)}%), tự động BỎ QUA.`);
+        accumulatedTextRef.current = '';
+        currentInterimRef.current = '';
+        if (onInterimTextRef.current) onInterimTextRef.current('');
+        
+        // Ngắt mic Web Speech để làm sạch buffer (đã abort là phải dọn sạch context của Chrome)
+        if (providerRef.current === 'web-speech' && webSpeechRecRef.current) {
+          try {
+            webSpeechRecRef.current.abort();
+          } catch (e) { /* ignore */ }
+        }
+        return;
+      }
+    }
+
+    // Chống trùng lặp tuyệt đối
+    if (lastQueuedTextRef.current === text) {
+      console.log(`🚫 [Queue] Bỏ qua câu trùng lặp: "${text}"`);
+      accumulatedTextRef.current = '';
+      currentInterimRef.current = '';
+      if (onInterimTextRef.current) onInterimTextRef.current('');
+      return;
+    }
+
+    lastQueuedTextRef.current = text;
 
     const noiseWords = ['phẩy.', 'chấm.', 'phẩy', 'chấm', 'hỏi.', 'hỏi', 'comma', 'period', 'dot'];
     const cleanLower = text.replace(/[.,!?;:]+$/g, '').trim().toLowerCase();
@@ -447,6 +709,13 @@ export default function useSimultaneousConversation({
     currentInterimRef.current = '';
     if (onInterimTextRef.current) onInterimTextRef.current('');
 
+    // For Web Speech: abort recognition to immediately clean buffer and force split the conversation into a new bubble
+    if (providerRef.current === 'web-speech' && webSpeechRecRef.current) {
+      try {
+        webSpeechRecRef.current.abort();
+      } catch (e) { /* ignore */ }
+    }
+
     const taskId = ++msgIdRef.current;
     console.log(`📦 [Queue] Đẩy tác vụ #${taskId} vào hàng đợi: "${taskText.slice(0, 50)}..."`);
     
@@ -478,6 +747,7 @@ export default function useSimultaneousConversation({
     isProcessingQueueRef.current = true;
     setQueueLength(translationQueueRef.current.length);
     const task = translationQueueRef.current[0];
+    userSpokeDuringTtsRef.current = false;
 
     try {
       if (onStatusChangeRef.current) onStatusChangeRef.current('translating');
@@ -543,6 +813,9 @@ export default function useSimultaneousConversation({
       translatedText = translatedText.trim();
       if (!translatedText) throw new Error('Empty translation');
 
+      // Lưu lại câu robot sắp đọc để phục vụ bộ lọc chống vọng AI
+      lastRobotSpokenTextRef.current = translatedText;
+
       console.log(`✅ [Queue Engine] Hoàn thành dịch #${task.id} -> "${translatedText.slice(0, 50)}"`);
 
       if (onFinalResultRef.current) {
@@ -571,7 +844,7 @@ export default function useSimultaneousConversation({
           const ttsRes = await fetch('/api/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: translatedText, lang: task.toLang, voice: voiceId, provider: providerRef.current }),
+            body: JSON.stringify({ text: translatedText, lang: task.toLang, voice: voiceId, provider: ttsProviderRef.current }),
             signal: AbortSignal.timeout(30000),
           });
 
@@ -627,6 +900,14 @@ export default function useSimultaneousConversation({
                     }
                   };
 
+                  // Áp dụng tốc độ phát giọng nói (Speech Rate)
+                  try {
+                    audio.defaultPlaybackRate = speedRef.current;
+                    audio.playbackRate = speedRef.current;
+                  } catch (e) {
+                    console.warn('⚠️ Gán playbackRate lỗi:', e);
+                  }
+
                   audio.play().catch(() => { done(); });
                 });
               } else {
@@ -640,6 +921,9 @@ export default function useSimultaneousConversation({
       console.error(`❌ [Queue Engine Error] #${task.id}:`, err);
       if (onErrorRef.current) onErrorRef.current(err.message);
     } finally {
+      // Khôi phục lại âm lượng phát loa cho lượt dịch tiếp theo
+      restoreTtsVolume();
+
       // Giải phóng mic
       isSpeakingRef.current = false;
       
@@ -648,10 +932,35 @@ export default function useSimultaneousConversation({
       isProcessingQueueRef.current = false;
       setQueueLength(translationQueueRef.current.length);
 
+      // Nếu dùng Web Speech, để đảm bảo 100% không bị treo mic sau khi phát loa:
+      // Chúng ta sẽ chủ động giữ nguyên mic nếu bật Nghe đè để tránh tạo ra khoảng "điếc" (deaf window) đúng lúc người dùng bắt đầu câu tiếp theo.
+      if (wantListeningRef.current && providerRef.current === 'web-speech') {
+        if (overlapListeningRef.current) {
+          // Khi BẬT Nghe đè: Luôn luôn giữ microphone chạy liên tục để nhạy bén bắt ngay từ đầu tiên của câu tiếp theo.
+          console.log('🔄 [Finally Nghe đè] Giữ nguyên Microphone chạy liên tục, tránh khoảng điếc đầu câu');
+          if (!isMicRunningRef.current) {
+            try {
+              setupWebSpeechRecognizer(inputLangRef.current);
+            } catch (_) { /* ignore */ }
+          }
+        } else {
+          // Khi TẮT Nghe đè: Chủ động abort mic cũ để giải phóng tài nguyên và khởi tạo lại sạch sẽ.
+          if (webSpeechRecRef.current) {
+            try {
+              webSpeechRecRef.current.abort();
+            } catch (e) { /* ignore */ }
+          } else if (!isMicRunningRef.current) {
+            try {
+              setupWebSpeechRecognizer(inputLangRef.current);
+            } catch (_) { /* ignore */ }
+          }
+        }
+      }
+
       // Gọi xử lý phần tử tiếp theo
       processTranslationQueue();
     }
-  }, [getOrCreateTtsAudio, releaseCurrentAudioUrl]);
+  }, [getOrCreateTtsAudio, releaseCurrentAudioUrl, setupWebSpeechRecognizer]);
 
   // ====== Start ======
   const start = useCallback(async (inputLang) => {
@@ -680,7 +989,30 @@ export default function useSimultaneousConversation({
 
       if (onStatusChangeRef.current) onStatusChangeRef.current('connecting');
 
-      if (providerRef.current === 'elevenlabs') {
+      // [AEC Background Stream] Kích hoạt khử vọng phần cứng toàn cục cho trình duyệt
+      if (overlapListeningRef.current) {
+        try {
+          if (bgStreamRef.current) {
+            try { bgStreamRef.current.getTracks().forEach(t => t.stop()); } catch (e) {}
+            bgStreamRef.current = null;
+          }
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true
+            }
+          });
+          bgStreamRef.current = stream;
+          console.log('🛡️ [AEC Background Stream] Activated native hardware echo cancellation globally');
+        } catch (err) {
+          console.warn('⚠️ [AEC Background Stream] Không thể kích hoạt stream khử vọng nền:', err);
+        }
+      }
+
+      if (providerRef.current === 'web-speech') {
+        await setupWebSpeechRecognizer(inputLang);
+      } else if (providerRef.current === 'elevenlabs') {
         await setupElevenLabsSTT(inputLang);
       } else {
         await setupRecognizer(inputLang);
@@ -691,7 +1023,7 @@ export default function useSimultaneousConversation({
       wantListeningRef.current = false;
       setIsListening(false);
     }
-  }, [setupRecognizer, setupElevenLabsSTT, getOrCreateTtsAudio]);
+  }, [setupRecognizer, setupElevenLabsSTT, setupWebSpeechRecognizer, getOrCreateTtsAudio]);
 
   // ====== Stop ======
   const stop = useCallback(async () => {
@@ -701,8 +1033,38 @@ export default function useSimultaneousConversation({
     clearTimeout(silenceTimeoutRef.current);
     clearInterval(elapsedTimerRef.current);
 
+    // Dọn dẹp background AEC stream nếu có
+    if (bgStreamRef.current) {
+      try {
+        bgStreamRef.current.getTracks().forEach(t => t.stop());
+      } catch (e) { /* ignore */ }
+      bgStreamRef.current = null;
+      console.log('🛡️ [AEC Background Stream] Deactivated');
+    }
+
     // Stop STT engines
-    if (providerRef.current === 'elevenlabs') {
+    if (providerRef.current === 'web-speech') {
+      if (webSpeechRecRef.current) {
+        try { webSpeechRecRef.current.stop(); } catch (e) { /* ignore */ }
+      }
+
+      // Đợi 150ms siêu ngắn để Web Speech trả nốt kết quả isFinal cuối cùng
+      await new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          resolve();
+        }, 150);
+        
+        if (!currentInterimRef.current.trim()) {
+          clearTimeout(timeout);
+          resolve();
+        } else {
+          webSpeechPendingResolveRef.current = () => {
+            clearTimeout(timeout);
+            resolve();
+          };
+        }
+      });
+    } else if (providerRef.current === 'elevenlabs') {
       if (elWsRef.current) {
         try { elWsRef.current.close(); } catch (e) { /* ignore */ }
         elWsRef.current = null;
@@ -753,7 +1115,28 @@ export default function useSimultaneousConversation({
     console.log('🛑 [Hold] User released key in simultaneous mode');
     clearTimeout(silenceTimeoutRef.current);
 
-    if (providerRef.current === 'elevenlabs') {
+    if (providerRef.current === 'web-speech') {
+      if (webSpeechRecRef.current) {
+        try { webSpeechRecRef.current.stop(); } catch (e) { /* ignore */ }
+      }
+
+      // Đợi 150ms siêu ngắn để Web Speech trả nốt kết quả isFinal cuối cùng
+      await new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          resolve();
+        }, 150);
+        
+        if (!currentInterimRef.current.trim()) {
+          clearTimeout(timeout);
+          resolve();
+        } else {
+          webSpeechPendingResolveRef.current = () => {
+            clearTimeout(timeout);
+            resolve();
+          };
+        }
+      });
+    } else if (providerRef.current === 'elevenlabs') {
       if (elWsRef.current) {
         try { elWsRef.current.close(); } catch (e) { /* ignore */ }
         elWsRef.current = null;
@@ -833,6 +1216,20 @@ export default function useSimultaneousConversation({
       if (azureStreamRef.current) {
         try { azureStreamRef.current.getTracks().forEach(t => t.stop()); } catch (e) { /* ignore */ }
         azureStreamRef.current = null;
+      }
+      if (bgStreamRef.current) {
+        try { bgStreamRef.current.getTracks().forEach(t => t.stop()); } catch (e) { /* ignore */ }
+        bgStreamRef.current = null;
+      }
+      if (webSpeechRecRef.current) {
+        try {
+          webSpeechRecRef.current.onstart = null;
+          webSpeechRecRef.current.onresult = null;
+          webSpeechRecRef.current.onerror = null;
+          webSpeechRecRef.current.onend = null;
+          webSpeechRecRef.current.abort();
+        } catch (e) { /* ignore */ }
+        webSpeechRecRef.current = null;
       }
       if (elWsRef.current) {
         try { elWsRef.current.close(); } catch (e) { /* ignore */ }

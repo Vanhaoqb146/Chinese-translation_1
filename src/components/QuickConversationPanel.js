@@ -1,6 +1,6 @@
 'use client';
 import { useState, useRef, useCallback, useEffect } from 'react';
-import useRealtimeConversation from '@/hooks/useRealtimeConversation';
+import useQuickConversation from '@/hooks/useQuickConversation';
 
 // Voice options per language — Azure AI Speech (sorted best quality first)
 const VOICE_OPTIONS_AZURE = {
@@ -57,15 +57,11 @@ const VOICE_OPTIONS_ELEVENLABS = [
 ];
 
 /**
- * ConversationPanel — Redesigned as full-screen chat app
+ * QuickConversationPanel — Giao diện bong bóng chat tinh gọn dành riêng cho tab "Giao tiếp nhanh".
  *
- * Layout:
- *   [Header Bar] — mute/unmute speakers + hamburger menu
- *   [Full-screen Chat Log] — Zalo-style bubbles, auto-scroll
- *   [FAB Mic Buttons] — floating at bottom
- *   [Drawer Menu] — settings slide-in from right
+ * Tối ưu hóa phản hồi micro siêu tốc, zero-cold start, nhả ra dịch ngay lập tức.
  */
-export default function ConversationPanel({
+export default function QuickConversationPanel({
   apiKey,
   model,
   srcLang,
@@ -80,7 +76,7 @@ export default function ConversationPanel({
   const getSessionValue = (key, defaultValue) => {
     if (typeof window !== 'undefined') {
       try {
-        const saved = sessionStorage.getItem(`vt_setting_${key}`);
+        const saved = sessionStorage.getItem(`vt_quick_setting_${key}`);
         if (saved !== null) return JSON.parse(saved);
       } catch { /* ignore */ }
     }
@@ -89,59 +85,47 @@ export default function ConversationPanel({
 
   const [convStatus, setConvStatus] = useState('idle');
   const [interimText, setInterimText] = useState('');
-  
-  const [silenceSeconds, setSilenceSeconds] = useState(() => getSessionValue('silenceSeconds', 4));
+
+  const [silenceSeconds, setSilenceSeconds] = useState(() => getSessionValue('silenceSeconds', 1.2));
   const [provider, setProvider] = useState(() => getSessionValue('provider', 'azure'));
-  const [ttsProvider, setTtsProvider] = useState(() => getSessionValue('ttsProvider', 'azure'));
   const [speed, setSpeed] = useState(() => getSessionValue('speed', 1.0));
   const [srcVoice, setSrcVoice] = useState(() => getSessionValue('srcVoice', VOICE_OPTIONS_AZURE[srcLang.translateCode]?.[0]?.id || ''));
   const [tgtVoice, setTgtVoice] = useState(() => getSessionValue('tgtVoice', VOICE_OPTIONS_AZURE[tgtLang.translateCode]?.[0]?.id || ''));
-  const [autoDetect, setAutoDetect] = useState(() => getSessionValue('autoDetect', false));
-  const [micMode, setMicMode] = useState(() => getSessionValue('micMode', 'click'));
+  const [micMode, setMicMode] = useState(() => getSessionValue('micMode', 'hold')); // Default Hold cho Giao tiếp nhanh
   const [autoTTS, setAutoTTS] = useState(() => getSessionValue('autoTTS', true));
 
-  // ===== activeTtsProvider =====
-  const activeTtsProvider = provider === 'web-speech' ? ttsProvider : provider;
-
-  // ===== NEW: Drawer menu state =====
   const [drawerOpen, setDrawerOpen] = useState(false);
-
-  // ===== NEW: Font size state =====
   const [fontSize, setFontSize] = useState(() => getSessionValue('fontSize', 17));
-
-  // ===== NEW: Mute/Unmute per language =====
   const [muteSrc, setMuteSrc] = useState(() => getSessionValue('muteSrc', false));
   const [muteTgt, setMuteTgt] = useState(() => getSessionValue('muteTgt', false));
 
   // Sync settings to sessionStorage
   useEffect(() => {
     try {
-      sessionStorage.setItem('vt_setting_provider', JSON.stringify(provider));
-      sessionStorage.setItem('vt_setting_ttsProvider', JSON.stringify(ttsProvider));
-      sessionStorage.setItem('vt_setting_speed', JSON.stringify(speed));
-      sessionStorage.setItem('vt_setting_silenceSeconds', JSON.stringify(silenceSeconds));
-      sessionStorage.setItem('vt_setting_srcVoice', JSON.stringify(srcVoice));
-      sessionStorage.setItem('vt_setting_tgtVoice', JSON.stringify(tgtVoice));
-      sessionStorage.setItem('vt_setting_autoDetect', JSON.stringify(autoDetect));
-      sessionStorage.setItem('vt_setting_micMode', JSON.stringify(micMode));
-      sessionStorage.setItem('vt_setting_autoTTS', JSON.stringify(autoTTS));
-      sessionStorage.setItem('vt_setting_fontSize', JSON.stringify(fontSize));
-      sessionStorage.setItem('vt_setting_muteSrc', JSON.stringify(muteSrc));
-      sessionStorage.setItem('vt_setting_muteTgt', JSON.stringify(muteTgt));
+      sessionStorage.setItem('vt_quick_setting_provider', JSON.stringify(provider));
+      sessionStorage.setItem('vt_quick_setting_speed', JSON.stringify(speed));
+      sessionStorage.setItem('vt_quick_setting_silenceSeconds', JSON.stringify(silenceSeconds));
+      sessionStorage.setItem('vt_quick_setting_srcVoice', JSON.stringify(srcVoice));
+      sessionStorage.setItem('vt_quick_setting_tgtVoice', JSON.stringify(tgtVoice));
+      sessionStorage.setItem('vt_quick_setting_micMode', JSON.stringify(micMode));
+      sessionStorage.setItem('vt_quick_setting_autoTTS', JSON.stringify(autoTTS));
+      sessionStorage.setItem('vt_quick_setting_fontSize', JSON.stringify(fontSize));
+      sessionStorage.setItem('vt_quick_setting_muteSrc', JSON.stringify(muteSrc));
+      sessionStorage.setItem('vt_quick_setting_muteTgt', JSON.stringify(muteTgt));
     } catch { /* ignore */ }
-  }, [provider, ttsProvider, speed, silenceSeconds, srcVoice, tgtVoice, autoDetect, micMode, autoTTS, fontSize, muteSrc, muteTgt]);
+  }, [provider, speed, silenceSeconds, srcVoice, tgtVoice, micMode, autoTTS, fontSize, muteSrc, muteTgt]);
 
-  // Auto reset voices when activeTtsProvider changes
+  // Tự động gán voice phù hợp khi thay đổi provider hoặc ngôn ngữ
   useEffect(() => {
-    if (activeTtsProvider === 'elevenlabs') {
+    if (provider === 'elevenlabs') {
       setSrcVoice(VOICE_OPTIONS_ELEVENLABS[0]?.id || '');
       setTgtVoice(VOICE_OPTIONS_ELEVENLABS[0]?.id || '');
     } else {
       setSrcVoice(VOICE_OPTIONS_AZURE[srcLang.translateCode]?.[0]?.id || '');
       setTgtVoice(VOICE_OPTIONS_AZURE[tgtLang.translateCode]?.[0]?.id || '');
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTtsProvider]);
+  }, [provider, srcLang.translateCode, tgtLang.translateCode]);
+
   const muteSrcRef = useRef(false);
   const muteTgtRef = useRef(false);
   useEffect(() => { muteSrcRef.current = muteSrc; }, [muteSrc]);
@@ -151,7 +135,7 @@ export default function ConversationPanel({
   const replayAudioRef = useRef(null);
   const [replayingId, setReplayingId] = useState(null);
 
-  // ===== Auto-scroll =====
+  // Auto-scroll xuống cuối bong bóng chat
   const autoScrollToBottom = useCallback(() => {
     setTimeout(() => {
       if (logBodyRef.current) {
@@ -179,7 +163,7 @@ export default function ConversationPanel({
     setInterimText('');
     autoScrollToBottom();
 
-    // Lưu vào DB
+    // Lưu vào database lịch sử
     if (sessionUser?.username) {
       fetch('/api/history', {
         method: 'POST',
@@ -197,17 +181,15 @@ export default function ConversationPanel({
   const handleStatusChange = useCallback((status) => setConvStatus(status), []);
   const handleError = useCallback((msg) => {
     setConvStatus('idle');
-    console.warn('Conversation Error:', msg);
+    console.warn('Quick Conversation Error:', msg);
   }, []);
 
-  // Voice refs
   const srcVoiceRef = useRef(srcVoice);
   const tgtVoiceRef = useRef(tgtVoice);
   srcVoiceRef.current = srcVoice;
   tgtVoiceRef.current = tgtVoice;
 
   const getVoiceForLang = useCallback((toLang) => {
-    // Kiểm tra mute: nếu mute ngôn ngữ đích → trả null (hook sẽ skip TTS cho ngôn ngữ đang mute)
     if (toLang === srcLang.translateCode && muteSrcRef.current) return '__MUTED__';
     if (toLang === tgtLang.translateCode && muteTgtRef.current) return '__MUTED__';
     if (toLang === srcLang.translateCode) return srcVoiceRef.current;
@@ -215,16 +197,15 @@ export default function ConversationPanel({
     return null;
   }, [srcLang.translateCode, tgtLang.translateCode]);
 
-  const conv = useRealtimeConversation({
+  // Gọi Hook useQuickConversation native siêu tốc
+  const conv = useQuickConversation({
     srcLangCode: srcLang.translateCode,
     tgtLangCode: tgtLang.translateCode,
     engine: model,
     silenceMs: silenceSeconds * 1000,
-    autoDetect,
     micMode,
     autoTTS,
     provider,
-    ttsProvider,
     speed,
     onInterimText: handleInterimText,
     onFinalResult: handleFinalResult,
@@ -233,7 +214,6 @@ export default function ConversationPanel({
     getVoiceForLang,
   });
 
-  // Dừng replay
   const stopReplay = useCallback(() => {
     if (replayAudioRef.current) {
       try { replayAudioRef.current.pause(); replayAudioRef.current.currentTime = 0; } catch (e) { /* ignore */ }
@@ -242,7 +222,7 @@ export default function ConversationPanel({
     setReplayingId(null);
   }, []);
 
-  // Phát lại (toggle)
+  // Phát lại âm thanh khi click nút loa trên bong bóng chat
   const handleReplay = useCallback(async (text, langCode, msgId) => {
     if (replayingId === msgId) { stopReplay(); return; }
     stopReplay();
@@ -253,10 +233,11 @@ export default function ConversationPanel({
         ? srcVoice
         : tgtVoice && langCode.includes(tgtLang.translateCode)
           ? tgtVoice : null;
+      
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, lang: baseLang, voice, provider: activeTtsProvider }),
+        body: JSON.stringify({ text, lang: baseLang, voice, provider }),
       });
       if (!res.ok) { setReplayingId(null); return; }
       const blob = await res.blob();
@@ -279,9 +260,9 @@ export default function ConversationPanel({
       console.warn('Replay error:', err);
       setReplayingId(null);
     }
-  }, [replayingId, stopReplay, srcVoice, tgtVoice, srcLang.translateCode, tgtLang.translateCode, activeTtsProvider, speed]);
+  }, [replayingId, stopReplay, srcVoice, tgtVoice, srcLang.translateCode, tgtLang.translateCode, provider, speed]);
 
-  // Bấm nút mic
+  // Xử lý Click-to-Talk (Bấm nói)
   const handleStartLang = useCallback((lang) => {
     stopReplay();
     if (conv.isListening) {
@@ -291,27 +272,29 @@ export default function ConversationPanel({
     }
   }, [conv, stopReplay]);
 
-  // Hold mode
+  // Xử lý Hold-to-Talk (Nhấn giữ nói)
   const holdStartTimeRef = useRef(0);
   const handleHoldStart = useCallback((lang, e) => {
-    const busy = convStatus === 'translating' || convStatus === 'speaking' || convStatus === 'connecting';
+    const busy = convStatus === 'translating' || convStatus === 'speaking';
     if (busy || conv.isListening) return;
-    if (replayAudioRef.current) {
-      try { replayAudioRef.current.pause(); replayAudioRef.current.currentTime = 0; } catch (e) { /* ignore */ }
-      replayAudioRef.current = null;
-    }
+    
+    stopReplay();
     holdStartTimeRef.current = Date.now();
+    
+    // Bắt capture pointer để mượt mà trên di động
     if (e?.target?.setPointerCapture && e?.pointerId != null) {
       try { e.target.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
     }
+    
     conv.start(lang);
     setTimeout(() => setReplayingId(null), 0);
-  }, [conv, convStatus]);
+  }, [conv, convStatus, stopReplay]);
 
   const handleHoldEnd = useCallback(() => {
-    if (Date.now() - holdStartTimeRef.current < 500) return;
+    // Ép buộc người dùng giữ tối thiểu 300ms tránh nhấp chuột vô tình
+    if (Date.now() - holdStartTimeRef.current < 300) return;
     if (!conv.isListening) return;
-    conv.stopHold();
+    conv.stop();
   }, [conv]);
 
   const handleStopSpeaking = useCallback(() => { conv.stopSpeaking(); }, [conv]);
@@ -332,10 +315,10 @@ export default function ConversationPanel({
     return lang ? lang.flag : '🌐';
   };
 
-  const isBusy = convStatus === 'translating' || convStatus === 'speaking' || convStatus === 'connecting';
+  const isBusy = convStatus === 'translating' || convStatus === 'speaking';
   const isHoldMode = micMode === 'hold';
 
-  // Hold pointer event helpers
+  // Props helper cho nhấn giữ phím
   const holdProps = (lang) => ({
     onPointerDown: (e) => { e.preventDefault(); handleHoldStart(lang, e); },
     onPointerUp: (e) => { e.preventDefault(); handleHoldEnd(); },
@@ -344,11 +327,18 @@ export default function ConversationPanel({
     style: { touchAction: 'none' },
   });
 
-  // =====================================================================
-  //  RENDER
-  // =====================================================================
   return (
     <div className="conv-auto">
+      {/* Cảnh báo trình duyệt hỗ trợ */}
+      {!conv.supported && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', fontSize: '13px',
+          fontWeight: 600, padding: '10px 14px', borderRadius: '12px', border: '1px solid rgba(239, 68, 68, 0.3)',
+          textAlign: 'center', marginBottom: '10px'
+        }}>
+          ⚠️ Web Speech API native chưa được hỗ trợ tốt trên trình duyệt này. Khuyến nghị bạn sử dụng **Google Chrome** hoặc **Safari** để có tốc độ phản hồi mượt mà nhất.
+        </div>
+      )}
 
       {/* ============ HEADER BAR — speakers + hamburger ============ */}
       <div className="conv-header-bar">
@@ -372,24 +362,24 @@ export default function ConversationPanel({
           </button>
         </div>
 
-        {/* Center: title */}
+        {/* Center: Title */}
         <div className="conv-header-center">
-          <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text2)' }}>💬 Giao tiếp</span>
+          <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--accent2)' }}>⚡ Giao tiếp nhanh (STT Native)</span>
         </div>
 
-        {/* Right: clear + hamburger */}
+        {/* Right: clear + settings */}
         <div className="conv-header-right">
           <button
             className="hamburger-btn"
-            onClick={() => handleClearHistory()}
+            onClick={handleClearHistory}
             title="Xóa hội thoại"
             style={{ fontSize: '14px' }}
           >🗑️</button>
           <button
             className="hamburger-btn"
             onClick={() => setDrawerOpen(true)}
-            title="Cài đặt"
-          >☰</button>
+            title="Cài đặt nhanh"
+          >⚙️</button>
         </div>
       </div>
 
@@ -398,10 +388,21 @@ export default function ConversationPanel({
         <div className="conv-log-body" ref={logBodyRef}>
           {history.length === 0 && !interimText && (
             <div className="conv-empty">
-              <div className="conv-empty-icon">💬</div>
-              <div>Nhấn nút micro để bắt đầu</div>
-              <div className="conv-empty-sub">
-                Chọn {srcLang.flag} {srcLang.name} hoặc {tgtLang.flag} {tgtLang.name}
+              <div className="conv-empty-icon" style={{ animation: 'pulse 2.5s infinite' }}>⚡</div>
+              <div style={{ fontWeight: 700, fontSize: '16px', color: 'var(--text)' }}>Chế độ Giao tiếp siêu tốc</div>
+              <div className="conv-empty-sub" style={{ marginTop: '5px' }}>
+                {isHoldMode ? 'Nhấn và Giữ nút Micro để nói, nhả ra là dịch luôn' : 'Bấm Micro, nói xong im lặng 1s tự dịch'}
+              </div>
+              
+              {/* CHÚ THÍCH CẢNH BÁO CHO KHÁCH HÀNG */}
+              <div style={{
+                marginTop: '30px', fontSize: '12px', color: 'var(--muted)',
+                background: 'rgba(255,255,255,0.03)', borderRadius: '12px',
+                padding: '12px 16px', maxWidth: '320px', border: '1px solid var(--border)',
+                lineHeight: 1.4, textAlign: 'left'
+              }}>
+                <strong style={{ color: 'var(--accent2)', display: 'block', marginBottom: '4px' }}>⚠️ Khuyến cáo sử dụng:</strong>
+                Để đảm bảo hiệu năng xử lý tốt nhất và không bị gián đoạn, mỗi lượt phát âm thanh hoặc thu âm liên tục **không nên vượt quá 5 phút**.
               </div>
             </div>
           )}
@@ -412,7 +413,7 @@ export default function ConversationPanel({
             const alignment = isSource ? 'align-right' : 'align-left';
 
             return (
-              <div key={`msg-${h.id}-${index}`} className={`chat-bubble-group ${alignment}`}>
+              <div key={`quick-msg-${h.id}-${index}`} className={`chat-bubble-group ${alignment}`}>
                 {/* Original text bubble */}
                 <div className="chat-bubble bubble-original" style={{ fontSize: `${fontSize}px` }}>
                   <span className="chat-bubble-flag">{getFlagForLang(h.fromLang)}</span>
@@ -448,7 +449,7 @@ export default function ConversationPanel({
             <div className="chat-bubble-interim" style={{ fontSize: `${fontSize}px` }}>
               <div className="chat-bubble-interim-text">
                 <span style={{ fontSize: '12px', opacity: 0.6, marginRight: 6 }}>
-                  {conv.activeLang ? getFlagForLang(conv.activeLang) : '🎤'}
+                  {conv.activeLang ? getFlagForLang(conv.activeLang) : '⚡'}
                 </span>
                 {interimText}
                 <span className="chat-bubble-interim-cursor" />
@@ -459,106 +460,73 @@ export default function ConversationPanel({
       </div>
 
       {/* ============ FAB MIC BUTTONS (Floating Bottom) ============ */}
-      <div className="fab-mic-container">
-        {autoDetect ? (
-          /* === AUTO DETECT: 1 mic === */
-          <>
-            <div className="fab-mic-group">
-              <button
-                className={`fab-mic-btn ${conv.isListening ? (isHoldMode ? 'holding' : 'recording') : ''}`}
-                disabled={isHoldMode ? false : isBusy}
-                {...(isHoldMode ? holdProps(srcLang.translateCode) : {
-                  onClick: () => handleStartLang(srcLang.translateCode),
-                  onContextMenu: (e) => e.preventDefault(),
-                })}
-              >
-                <span className="fab-mic-btn-icon">
-                  {convStatus === 'speaking' ? '🔊' :
-                    convStatus === 'translating' ? '⏳' :
-                      convStatus === 'connecting' ? '⏳' :
-                        conv.isListening ? (isHoldMode ? '🎙' : '⏹') : '🎤'}
-                </span>
-                {conv.isListening && convStatus === 'listening' && <span className="pulse-ring" />}
-                {conv.isListening && convStatus === 'listening' && <span className="pulse-ring p2" />}
-              </button>
-              <div className="fab-mic-label">
-                {conv.activeLang ? getFlagForLang(conv.activeLang) : '🌐'} Auto
-              </div>
-            </div>
-
-            <div className="fab-status">
-              <span className="fab-status-text">
-                {convStatus === 'idle' && (isHoldMode ? '👇 Nhấn giữ' : '👆 Bấm nói')}
-                {convStatus === 'connecting' && '⏳ Kết nối...'}
-                {convStatus === 'listening' && (isHoldMode ? '🎙 Nghe...' : '🟢 Nghe...')}
-                {convStatus === 'translating' && '⏳ Dịch...'}
-                {convStatus === 'speaking' && (
-                  <button className="fab-stop-speaking-btn" onClick={handleStopSpeaking}>🔇 Tắt</button>
-                )}
+      <div className="fab-mic-container" style={{ paddingBottom: '12px' }}>
+        {/* MANUAL: 2 mics riêng biệt cho 2 ngôn ngữ */}
+        <>
+          {/* Source mic */}
+          <div className="fab-mic-group">
+            <button
+              className={`fab-mic-btn ${conv.activeLang === srcLang.translateCode ? (isHoldMode ? 'holding' : 'recording') : ''}`}
+              disabled={isHoldMode ? false : (isBusy || (conv.isListening && conv.activeLang !== srcLang.translateCode))}
+              {...(isHoldMode ? holdProps(srcLang.translateCode) : {
+                onClick: () => handleStartLang(srcLang.translateCode),
+                onContextMenu: (e) => e.preventDefault(),
+              })}
+              style={{
+                background: conv.activeLang === srcLang.translateCode ? 'var(--accent3)' : 'var(--accent1)',
+                boxShadow: conv.activeLang === srcLang.translateCode ? '0 0 25px rgba(2,132,199,0.5)' : '0 4px 15px rgba(14,165,233,0.3)',
+              }}
+            >
+              <span className="fab-mic-btn-icon">
+                {conv.activeLang === srcLang.translateCode && convStatus === 'speaking' ? '🔊' :
+                  conv.activeLang === srcLang.translateCode && convStatus === 'translating' ? '⏳' :
+                    conv.activeLang === srcLang.translateCode ? (isHoldMode ? '🎙' : '⏹') : '🎤'}
               </span>
-              {conv.isListening && <span className="fab-timer">{formatTime(conv.elapsed)}</span>}
-            </div>
-          </>
-        ) : (
-          /* === MANUAL: 2 mics === */
-          <>
-            {/* Source mic */}
-            <div className="fab-mic-group">
-              <button
-                className={`fab-mic-btn ${conv.activeLang === srcLang.translateCode ? (isHoldMode ? 'holding' : 'recording') : ''}`}
-                disabled={isHoldMode ? false : (isBusy || (conv.isListening && conv.activeLang !== srcLang.translateCode))}
-                {...(isHoldMode ? holdProps(srcLang.translateCode) : {
-                  onClick: () => handleStartLang(srcLang.translateCode),
-                  onContextMenu: (e) => e.preventDefault(),
-                })}
-              >
-                <span className="fab-mic-btn-icon">
-                  {conv.activeLang === srcLang.translateCode && convStatus === 'speaking' ? '🔊' :
-                    conv.activeLang === srcLang.translateCode && convStatus === 'translating' ? '⏳' :
-                      conv.activeLang === srcLang.translateCode ? (isHoldMode ? '🎙' : '⏹') : '🎤'}
-                </span>
-                {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
-                {conv.activeLang === srcLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
-              </button>
-              <div className="fab-mic-label">{srcLang.flag} {srcLang.name}</div>
-            </div>
+              {conv.activeLang === srcLang.translateCode && conv.isListening && <span className="pulse-ring" />}
+              {conv.activeLang === srcLang.translateCode && conv.isListening && <span className="pulse-ring p2" />}
+            </button>
+            <div className="fab-mic-label">{srcLang.flag} {srcLang.name}</div>
+          </div>
 
-            {/* Center status */}
-            <div className="fab-status">
-              <span className="fab-status-text">
-                {convStatus === 'idle' && (isHoldMode ? '👇 Nhấn giữ' : '👆 Chọn ngữ')}
-                {convStatus === 'connecting' && '⏳...'}
-                {convStatus === 'listening' && (isHoldMode ? '🎙 Nghe...' : '🟢 Nghe...')}
-                {convStatus === 'translating' && '⏳ Dịch...'}
-                {convStatus === 'speaking' && (
-                  <button className="fab-stop-speaking-btn" onClick={handleStopSpeaking}>🔇 Tắt</button>
-                )}
+          {/* Center status */}
+          <div className="fab-status">
+            <span className="fab-status-text" style={{ fontSize: '12px', fontWeight: 700 }}>
+              {convStatus === 'idle' && (isHoldMode ? '👇 GIỮ ĐỂ NÓI' : '👆 BẤM ĐỂ NÓI')}
+              {convStatus === 'connecting' && '⚡ Khởi động...'}
+              {convStatus === 'listening' && (isHoldMode ? '🎙 Đang nghe...' : '🟢 Đang nghe...')}
+              {convStatus === 'translating' && '⚡ Dịch nhanh...'}
+              {convStatus === 'speaking' && (
+                <button className="fab-stop-speaking-btn" onClick={handleStopSpeaking}>🔇 Tắt</button>
+              )}
+            </span>
+            {conv.isListening && <span className="fab-timer">{formatTime(conv.elapsed)}</span>}
+          </div>
+
+          {/* Target mic */}
+          <div className="fab-mic-group">
+            <button
+              className={`fab-mic-btn ${conv.activeLang === tgtLang.translateCode ? (isHoldMode ? 'holding' : 'recording') : ''}`}
+              disabled={isHoldMode ? false : (isBusy || (conv.isListening && conv.activeLang !== tgtLang.translateCode))}
+              {...(isHoldMode ? holdProps(tgtLang.translateCode) : {
+                onClick: () => handleStartLang(tgtLang.translateCode),
+                onContextMenu: (e) => e.preventDefault(),
+              })}
+              style={{
+                background: conv.activeLang === tgtLang.translateCode ? 'var(--accent3)' : 'var(--accent1)',
+                boxShadow: conv.activeLang === tgtLang.translateCode ? '0 0 25px rgba(2,132,199,0.5)' : '0 4px 15px rgba(14,165,233,0.3)',
+              }}
+            >
+              <span className="fab-mic-btn-icon">
+                {conv.activeLang === tgtLang.translateCode && convStatus === 'speaking' ? '🔊' :
+                  conv.activeLang === tgtLang.translateCode && convStatus === 'translating' ? '⏳' :
+                    conv.activeLang === tgtLang.translateCode ? (isHoldMode ? '🎙' : '⏹') : '🎤'}
               </span>
-              {conv.isListening && <span className="fab-timer">{formatTime(conv.elapsed)}</span>}
-            </div>
-
-            {/* Target mic */}
-            <div className="fab-mic-group">
-              <button
-                className={`fab-mic-btn ${conv.activeLang === tgtLang.translateCode ? (isHoldMode ? 'holding' : 'recording') : ''}`}
-                disabled={isHoldMode ? false : (isBusy || (conv.isListening && conv.activeLang !== tgtLang.translateCode))}
-                {...(isHoldMode ? holdProps(tgtLang.translateCode) : {
-                  onClick: () => handleStartLang(tgtLang.translateCode),
-                  onContextMenu: (e) => e.preventDefault(),
-                })}
-              >
-                <span className="fab-mic-btn-icon">
-                  {conv.activeLang === tgtLang.translateCode && convStatus === 'speaking' ? '🔊' :
-                    conv.activeLang === tgtLang.translateCode && convStatus === 'translating' ? '⏳' :
-                      conv.activeLang === tgtLang.translateCode ? (isHoldMode ? '🎙' : '⏹') : '🎤'}
-                </span>
-                {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring" />}
-                {conv.activeLang === tgtLang.translateCode && convStatus === 'listening' && <span className="pulse-ring p2" />}
-              </button>
-              <div className="fab-mic-label">{tgtLang.flag} {tgtLang.name}</div>
-            </div>
-          </>
-        )}
+              {conv.activeLang === tgtLang.translateCode && conv.isListening && <span className="pulse-ring" />}
+              {conv.activeLang === tgtLang.translateCode && conv.isListening && <span className="pulse-ring p2" />}
+            </button>
+            <div className="fab-mic-label">{tgtLang.flag} {tgtLang.name}</div>
+          </div>
+        </>
       </div>
 
       {/* ============ DRAWER MENU (Settings) ============ */}
@@ -567,12 +535,11 @@ export default function ConversationPanel({
           <div className="drawer-overlay" onClick={() => setDrawerOpen(false)} />
           <div className="drawer-content">
             <div className="drawer-header">
-              <h3>⚙️ Cài đặt</h3>
+              <h3>⚙️ Cài đặt Giao tiếp nhanh</h3>
               <button className="drawer-close-btn" onClick={() => setDrawerOpen(false)}>✕</button>
             </div>
             <div className="drawer-body">
-
-              {/* Font size slider */}
+              {/* Cỡ chữ */}
               <div className="drawer-section">
                 <div className="drawer-section-title">🔠 Cỡ chữ</div>
                 <div className="font-size-slider-row">
@@ -590,16 +557,15 @@ export default function ConversationPanel({
                 </div>
               </div>
 
-              {/* Provider selection */}
+              {/* Giọng đọc */}
               <div className="drawer-section">
                 <div className="drawer-section-title">🤖 Speech Provider</div>
                 <div className="drawer-row" style={{ gap: 6 }}>
                   <label>API</label>
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', gap: 4 }}>
                     {[
                       { key: 'azure', label: 'Azure', icon: '☁️' },
                       { key: 'elevenlabs', label: 'ElevenLabs', icon: '🎭' },
-                      { key: 'web-speech', label: 'Web Speech', icon: '🎙️' },
                     ].map(opt => (
                       <button
                         key={opt.key}
@@ -618,34 +584,6 @@ export default function ConversationPanel({
                     ))}
                   </div>
                 </div>
-
-                {/* Sub-option: TTS Engine choice for Web Speech */}
-                {provider === 'web-speech' && (
-                  <div className="drawer-row" style={{ gap: 6, marginTop: 10, borderTop: '1px dashed rgba(255,255,255,0.05)', paddingTop: 10 }}>
-                    <label>Bộ phát TTS</label>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      {[
-                        { key: 'azure', label: 'Azure', icon: '☁️' },
-                        { key: 'elevenlabs', label: 'ElevenLabs', icon: '🎭' },
-                      ].map(opt => (
-                        <button
-                          key={opt.key}
-                          onClick={() => !conv.isListening && setTtsProvider(opt.key)}
-                          disabled={conv.isListening}
-                          style={{
-                            padding: '4px 10px', fontSize: '11px', fontWeight: 600,
-                            borderRadius: 6, cursor: conv.isListening ? 'not-allowed' : 'pointer',
-                            border: ttsProvider === opt.key ? '1.2px solid #8b5cf6' : '1px solid rgba(0,0,0,0.1)',
-                            background: ttsProvider === opt.key ? 'rgba(139,92,246,0.12)' : 'rgba(0,0,0,0.02)',
-                            color: ttsProvider === opt.key ? '#8b5cf6' : '#6b7280',
-                            opacity: conv.isListening ? 0.5 : 1,
-                            transition: 'all 0.15s',
-                          }}
-                        >{opt.icon} {opt.label}</button>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
 
               {/* Tốc độ nói */}
@@ -674,11 +612,10 @@ export default function ConversationPanel({
                 </div>
               </div>
 
-              {/* Voice selection */}
+              {/* Lựa chọn Voice */}
               <div className="drawer-section">
-                <div className="drawer-section-title">🔊 Giọng đọc {activeTtsProvider === 'elevenlabs' ? '(ElevenLabs)' : '(Azure)'}</div>
-                {activeTtsProvider === 'elevenlabs' ? (
-                  /* ElevenLabs: same shared voice list for both languages (multilingual model) */
+                <div className="drawer-section-title">🔊 Giọng đọc {provider === 'elevenlabs' ? '(ElevenLabs)' : '(Azure)'}</div>
+                {provider === 'elevenlabs' ? (
                   <>
                     <div className="drawer-row">
                       <label>{srcLang.flag} Giọng {srcLang.name}</label>
@@ -694,7 +631,6 @@ export default function ConversationPanel({
                     </div>
                   </>
                 ) : (
-                  /* Azure: language-specific voice lists */
                   <>
                     <div className="drawer-row">
                       <label>{srcLang.flag} {srcLang.name}</label>
@@ -712,24 +648,13 @@ export default function ConversationPanel({
                 )}
               </div>
 
-              {/* Mic mode + toggles */}
+              {/* Chế độ micro */}
               <div className="drawer-section">
-                <div className="drawer-section-title">🎤 Chế độ micro</div>
-
-                {/* Auto detect toggle */}
-                <div className="drawer-row">
-                  <label>🌐 Tự nhận dạng ngôn ngữ</label>
-                  <div
-                    className={`toggle-switch ${autoDetect ? 'on' : 'off'} ${conv.isListening ? 'disabled' : ''}`}
-                    onClick={() => !conv.isListening && setAutoDetect(!autoDetect)}
-                  >
-                    <div className="toggle-switch-knob" />
-                  </div>
-                </div>
+                <div className="drawer-section-title">🎤 Cấu hình Micro</div>
 
                 {/* Auto TTS toggle */}
                 <div className="drawer-row">
-                  <label>{autoTTS ? '🔊' : '🔇'} Tự phát giọng sau dịch</label>
+                  <label>{autoTTS ? '🔊' : '🔇'} Tự động phát âm bản dịch</label>
                   <div
                     className={`toggle-switch ${autoTTS ? 'on' : 'off'} ${conv.isListening ? 'disabled' : ''}`}
                     onClick={() => !conv.isListening && setAutoTTS(!autoTTS)}
@@ -740,12 +665,11 @@ export default function ConversationPanel({
 
                 {/* Mic mode buttons */}
                 <div className="drawer-row" style={{ flexWrap: 'wrap', gap: 6 }}>
-                  <label>🎤 Mode</label>
+                  <label>Chế độ</label>
                   <div style={{ display: 'flex', gap: 4 }}>
                     {[
-                      ...(!autoDetect ? [{ key: 'click', label: 'Bấm', icon: '👆' }] : []),
-                      { key: 'continuous', label: 'Liên tục', icon: '🔄' },
-                      { key: 'hold', label: 'Giữ', icon: '✋' },
+                      { key: 'click', label: 'Bấm nói', icon: '👆' },
+                      { key: 'hold', label: 'Nhấn giữ', icon: '✋' },
                     ].map(opt => (
                       <button
                         key={opt.key}
@@ -768,31 +692,31 @@ export default function ConversationPanel({
                 </div>
 
                 {/* Silence slider */}
-                {micMode !== 'hold' && (
+                {micMode === 'click' && (
                   <div className="drawer-row" style={{ gap: 8 }}>
-                    <label>🕐 Im lặng</label>
+                    <label>🕐 Ngắt sau im lặng</label>
                     <input
                       type="range"
-                      min={2} max={10} step={1}
+                      min={0.8} max={3.0} step={0.2}
                       value={silenceSeconds}
                       onChange={(e) => setSilenceSeconds(Number(e.target.value))}
                       disabled={conv.isListening}
                       style={{ flex: 1, accentColor: '#0ea5e9', cursor: conv.isListening ? 'not-allowed' : 'pointer' }}
                     />
-                    <span style={{ fontSize: '13px', fontWeight: 700, color: '#0ea5e9', minWidth: 30, textAlign: 'center' }}>
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: '#0ea5e9', minWidth: 35, textAlign: 'center' }}>
                       {silenceSeconds}s
                     </span>
                   </div>
                 )}
               </div>
 
-              {/* Warning */}
+              {/* Warning/Notes */}
               <div style={{
-                fontSize: '12px', color: '#ff4d4f', textAlign: 'center', lineHeight: 1.4,
-                fontWeight: 600, background: 'rgba(255,77,79,0.06)', borderRadius: 8,
-                padding: '8px 12px', border: '1px solid rgba(255,77,79,0.15)',
+                fontSize: '12px', color: '#eab308', textAlign: 'left', lineHeight: 1.4,
+                fontWeight: 600, background: 'rgba(234,179,8,0.06)', borderRadius: 8,
+                padding: '10px 14px', border: '1px solid rgba(234,179,8,0.15)',
               }}>
-                ⚠️ Không nên thu âm quá 3 phút để đảm bảo dịch tốt!
+                ⚠️ Khuyến cáo: Không nên nghe phát âm hoặc thu âm liên tục quá 5 phút mỗi lần để đạt hiệu suất và tốc độ tốt nhất.
               </div>
             </div>
           </div>

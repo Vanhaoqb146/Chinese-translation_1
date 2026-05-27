@@ -46,7 +46,9 @@ export default function useRealtimeConversation({
   autoDetect = false,
   micMode = 'click', // 'click' | 'continuous' | 'hold'
   autoTTS = true,
-  provider = 'azure', // 'azure' | 'elevenlabs'
+  provider = 'azure', // 'azure' | 'elevenlabs' | 'web-speech'
+  ttsProvider = 'azure', // 'azure' | 'elevenlabs'
+  speed = 1.0,        // Tốc độ phát giọng nói
   onInterimText,
   onFinalResult,
   onStatusChange,
@@ -72,6 +74,12 @@ export default function useRealtimeConversation({
   const elMediaRef = useRef(null);    // MediaRecorder
   const elStreamRef = useRef(null);   // MediaStream (mic)
 
+  // WebSpeech-specific refs
+  const webSpeechRecRef = useRef(null);
+  const isWebSpeechFinalFiredRef = useRef(false);
+  const webSpeechPendingResolveRef = useRef(null);
+  const isMicRunningRef = useRef(false);
+
   const accumulatedTextRef = useRef('');
   const currentInterimRef = useRef('');
   const silenceTimeoutRef = useRef(null);
@@ -94,22 +102,25 @@ export default function useRealtimeConversation({
   const micModeRef = useRef(micMode);
   const autoTTSRef = useRef(autoTTS);
   const providerRef = useRef(provider);
+  const ttsProviderRef = useRef(ttsProvider);
+  const speedRef = useRef(speed);
 
-  useEffect(() => {
-    srcLangCodeRef.current = srcLangCode;
-    tgtLangCodeRef.current = tgtLangCode;
-    onFinalResultRef.current = onFinalResult;
-    onStatusChangeRef.current = onStatusChange;
-    onErrorRef.current = onError;
-    onInterimTextRef.current = onInterimText;
-    engineRef.current = engine;
-    silenceMsRef.current = silenceMs;
-    getVoiceForLangRef.current = getVoiceForLang;
-    autoDetectRef.current = autoDetect;
-    micModeRef.current = micMode;
-    autoTTSRef.current = autoTTS;
-    providerRef.current = provider;
-  });
+  // Update refs synchronously during render to completely bypass React scheduling lags
+  srcLangCodeRef.current = srcLangCode;
+  tgtLangCodeRef.current = tgtLangCode;
+  onFinalResultRef.current = onFinalResult;
+  onStatusChangeRef.current = onStatusChange;
+  onErrorRef.current = onError;
+  onInterimTextRef.current = onInterimText;
+  engineRef.current = engine;
+  silenceMsRef.current = silenceMs;
+  getVoiceForLangRef.current = getVoiceForLang;
+  autoDetectRef.current = autoDetect;
+  micModeRef.current = micMode;
+  autoTTSRef.current = autoTTS;
+  providerRef.current = provider;
+  ttsProviderRef.current = ttsProvider;
+  speedRef.current = speed;
 
   // Reuse one HTMLAudioElement to avoid iOS Safari blocking autoplay on new audio elements.
   const getOrCreateTtsAudio = useCallback(() => {
@@ -424,6 +435,89 @@ export default function useRealtimeConversation({
     return ws;
   }, []);
 
+  // ====== Setup Web Speech API native ======
+  const setupWebSpeechRecognizer = useCallback((inputLang) => {
+    if (typeof window === 'undefined') return null;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      throw new Error('Trình duyệt không hỗ trợ Web Speech API.');
+    }
+
+    const rec = new SpeechRecognition();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+
+    const langMap = { zh: 'zh-CN', vi: 'vi-VN', en: 'en-US', ja: 'ja-JP', ko: 'ko-KR' };
+    rec.lang = langMap[inputLang] || inputLang;
+
+    rec.onstart = () => {
+      console.log('🟢 [Web Speech native] Session started');
+      isMicRunningRef.current = true;
+      if (onStatusChangeRef.current) onStatusChangeRef.current('listening');
+    };
+
+    rec.onresult = (e) => {
+      if (isSpeakingRef.current) return;
+      isWebSpeechFinalFiredRef.current = false;
+
+      let interim = '';
+      let final = '';
+
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const transcript = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          final += transcript + ' ';
+        } else {
+          interim += transcript;
+        }
+      }
+
+      if (final.trim()) {
+        accumulatedTextRef.current += (accumulatedTextRef.current ? ' ' : '') + final.trim();
+        currentInterimRef.current = '';
+        isWebSpeechFinalFiredRef.current = true;
+        
+        if (webSpeechPendingResolveRef.current) {
+          webSpeechPendingResolveRef.current();
+          webSpeechPendingResolveRef.current = null;
+        }
+      } else if (interim.trim()) {
+        currentInterimRef.current = interim.trim();
+      }
+
+      const display = accumulatedTextRef.current + (accumulatedTextRef.current && currentInterimRef.current ? ' ' : '') + currentInterimRef.current;
+      if (onInterimTextRef.current) onInterimTextRef.current(display);
+
+      resetSilenceTimer();
+    };
+
+    rec.onerror = (e) => {
+      if (e.error === 'no-speech' || e.error === 'aborted') return;
+      console.error(`❌ [Web Speech Lỗi]`, e.error);
+      if (onErrorRef.current) onErrorRef.current(`Micro: ${e.error}`);
+    };
+
+    rec.onend = () => {
+      console.log('🔴 [Web Speech native] Session stopped');
+      isMicRunningRef.current = false;
+      if (wantListeningRef.current && !isSpeakingRef.current && providerRef.current === 'web-speech') {
+        setTimeout(() => {
+          if (wantListeningRef.current && !isSpeakingRef.current && !isMicRunningRef.current) {
+            try {
+              setupWebSpeechRecognizer(inputLangRef.current);
+              console.log('🔄 [Web Speech native] Restarted safely after 150ms delay');
+            } catch (_) { /* ignore */ }
+          }
+        }, 150);
+      }
+    };
+
+    webSpeechRecRef.current = rec;
+    rec.start();
+    return rec;
+  }, []);
+
   // ====== Silence Timer ======
   const resetSilenceTimer = useCallback(() => {
     clearTimeout(silenceTimeoutRef.current);
@@ -441,8 +535,9 @@ export default function useRealtimeConversation({
   // ====== PIPELINE: Dịch + TTS (dùng chung cho silence timer & manual stop) ======
   const triggerTranslation = useCallback(async () => {
     let text = accumulatedTextRef.current.trim();
-    if (!text && currentInterimRef.current.trim()) {
-      text = currentInterimRef.current.trim();
+    const interim = currentInterimRef.current.trim();
+    if (interim) {
+      text = text ? text + ' ' + interim : interim;
     }
     if (!text) return;
 
@@ -530,7 +625,18 @@ export default function useRealtimeConversation({
     if (onStatusChangeRef.current) onStatusChangeRef.current('translating');
 
     // Đóng recognizer/WebSocket cũ hoàn toàn
-    if (providerRef.current === 'elevenlabs') {
+    if (providerRef.current === 'web-speech') {
+      if (webSpeechRecRef.current) {
+        try {
+          webSpeechRecRef.current.onstart = null;
+          webSpeechRecRef.current.onresult = null;
+          webSpeechRecRef.current.onerror = null;
+          webSpeechRecRef.current.onend = null;
+          webSpeechRecRef.current.abort();
+        } catch (e) { /* ignore */ }
+        webSpeechRecRef.current = null;
+      }
+    } else if (providerRef.current === 'elevenlabs') {
       // Cleanup ElevenLabs
       if (elWsRef.current) {
         try { elWsRef.current.close(); } catch (e) { /* ignore */ }
@@ -651,7 +757,7 @@ export default function useRealtimeConversation({
           const ttsRes = await fetch('/api/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: translatedText, lang: toLang, voice: voiceId, provider: providerRef.current }),
+            body: JSON.stringify({ text: translatedText, lang: toLang, voice: voiceId, provider: ttsProviderRef.current }),
             signal: AbortSignal.timeout(30000),
           });
 
@@ -712,6 +818,14 @@ export default function useRealtimeConversation({
                     }
                   };
 
+                  // Áp dụng tốc độ phát giọng nói (Speech Rate)
+                  try {
+                    audio.defaultPlaybackRate = speedRef.current;
+                    audio.playbackRate = speedRef.current;
+                  } catch (e) {
+                    console.warn('⚠️ Gán playbackRate lỗi:', e);
+                  }
+
                   audio.play().catch((err) => {
                     console.warn('⚠️ [TTS] audio.play() blocked:', err);
                     done();
@@ -753,7 +867,11 @@ export default function useRealtimeConversation({
     } else if (shouldResume) {
       try {
         console.log('\u{1F504} [Resume] Tạo STT mới...');
-        if (providerRef.current === 'elevenlabs') {
+        if (providerRef.current === 'web-speech') {
+          if (!isMicRunningRef.current) {
+            await setupWebSpeechRecognizer(inputLangRef.current);
+          }
+        } else if (providerRef.current === 'elevenlabs') {
           await setupElevenLabsSTT(inputLangRef.current);
         } else {
           await setupRecognizer(inputLangRef.current);
@@ -773,7 +891,7 @@ export default function useRealtimeConversation({
       setActiveLang(null);
       if (onStatusChangeRef.current) onStatusChangeRef.current('idle');
     }
-  }, [setupRecognizer, setupElevenLabsSTT, getOrCreateTtsAudio, releaseCurrentAudioUrl]);
+  }, [setupRecognizer, setupElevenLabsSTT, setupWebSpeechRecognizer, getOrCreateTtsAudio, releaseCurrentAudioUrl]);
 
   // ====== Start(inputLang) — entry point ======
   const start = useCallback(async (inputLang) => {
@@ -803,7 +921,9 @@ export default function useRealtimeConversation({
       if (onStatusChangeRef.current) onStatusChangeRef.current('connecting');
 
       // Tạo STT (dùng hàm tương ứng với provider)
-      if (providerRef.current === 'elevenlabs') {
+      if (providerRef.current === 'web-speech') {
+        await setupWebSpeechRecognizer(inputLang);
+      } else if (providerRef.current === 'elevenlabs') {
         await setupElevenLabsSTT(inputLang);
       } else {
         await setupRecognizer(inputLang);
@@ -816,7 +936,7 @@ export default function useRealtimeConversation({
       wantListeningRef.current = false;
       setIsListening(false);
     }
-  }, [setupRecognizer, setupElevenLabsSTT, getOrCreateTtsAudio]);
+  }, [setupRecognizer, setupElevenLabsSTT, setupWebSpeechRecognizer, getOrCreateTtsAudio]);
 
   // ====== Stop ======
   const stop = useCallback(async () => {
@@ -827,7 +947,28 @@ export default function useRealtimeConversation({
     clearInterval(elapsedTimerRef.current);
 
     // Stop + close STT
-    if (providerRef.current === 'elevenlabs') {
+    if (providerRef.current === 'web-speech') {
+      if (webSpeechRecRef.current) {
+        try { webSpeechRecRef.current.stop(); } catch (e) { /* ignore */ }
+      }
+
+      // Đợi 150ms siêu ngắn để Web Speech trả nốt kết quả isFinal cuối cùng
+      await new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          resolve();
+        }, 150);
+        
+        if (!currentInterimRef.current.trim()) {
+          clearTimeout(timeout);
+          resolve();
+        } else {
+          webSpeechPendingResolveRef.current = () => {
+            clearTimeout(timeout);
+            resolve();
+          };
+        }
+      });
+    } else if (providerRef.current === 'elevenlabs') {
       if (elWsRef.current) {
         try { elWsRef.current.close(); } catch (e) { /* ignore */ }
         elWsRef.current = null;
@@ -872,8 +1013,35 @@ export default function useRealtimeConversation({
     console.log('🛑 [Hold] User thả tay → dừng mic + dịch');
     clearTimeout(silenceTimeoutRef.current);
 
+    // Đặt trạng thái nghe là false ngay lập tức để UI phản hồi nhạy bén
+    setIsListening(false);
+
+    // Trì hoãn đóng mic 600ms để thu trọn vẹn từ cuối cùng của mọi STT engine
+    await new Promise(resolve => setTimeout(resolve, 600));
+
     // Đóng STT ngay
-    if (providerRef.current === 'elevenlabs') {
+    if (providerRef.current === 'web-speech') {
+      if (webSpeechRecRef.current) {
+        try { webSpeechRecRef.current.stop(); } catch (e) { /* ignore */ }
+      }
+
+      // Đợi 150ms siêu ngắn để Web Speech trả nốt kết quả isFinal cuối cùng
+      await new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          resolve();
+        }, 150);
+        
+        if (!currentInterimRef.current.trim()) {
+          clearTimeout(timeout);
+          resolve();
+        } else {
+          webSpeechPendingResolveRef.current = () => {
+            clearTimeout(timeout);
+            resolve();
+          };
+        }
+      });
+    } else if (providerRef.current === 'elevenlabs') {
       if (elWsRef.current) {
         try { elWsRef.current.close(); } catch (e) { /* ignore */ }
         elWsRef.current = null;
