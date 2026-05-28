@@ -22,19 +22,23 @@ const CJK_CHARS = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/;
 const HANGUL_CHARS = /[\uac00-\ud7af\u1100-\u11ff]/;
 const KANA_CHARS = /[\u3040-\u309f\u30a0-\u30ff]/;
 
-function detectLangFromText(text) {
+function detectLangFromText(text, srcLang = 'zh', tgtLang = 'vi') {
   if (!text) return null;
   const hasViet = VIET_DIACRITICS.test(text);
   const hasCJK = CJK_CHARS.test(text);
   const hasKorean = HANGUL_CHARS.test(text);
   const hasJapanese = KANA_CHARS.test(text);
 
-  if (hasViet && !hasCJK) return 'vi';
-  if (hasCJK && !hasViet && !hasJapanese && !hasKorean) return 'zh';
+  if (hasViet) return 'vi';
+  if (hasCJK) return 'zh';
   if (hasJapanese) return 'ja';
   if (hasKorean) return 'ko';
-  // Latin without diacritics → likely English
-  if (/^[a-zA-Z0-9\s.,!?'"\-:;()]+$/.test(text.trim())) return 'en';
+
+  // Context-aware Latin detection:
+  if (/[a-zA-Z]/.test(text)) {
+    if (srcLang === 'vi' || tgtLang === 'vi') return 'vi';
+    return 'en';
+  }
   return null;
 }
 
@@ -623,7 +627,7 @@ export default function useRealtimeConversation({
 
     // [FIX] Xác định ngôn ngữ từ NỘI DUNG text — đáng tin hơn Azure auto-detect
     if (autoDetectRef.current) {
-      const textLang = detectLangFromText(text);
+      const textLang = detectLangFromText(text, srcLangCodeRef.current, tgtLangCodeRef.current);
       if (textLang && textLang !== inputLangRef.current) {
         console.log(`🔍 [Text-detect] "${text.slice(0, 30)}..." → ${textLang} (was: ${inputLangRef.current})`);
         inputLangRef.current = textLang;

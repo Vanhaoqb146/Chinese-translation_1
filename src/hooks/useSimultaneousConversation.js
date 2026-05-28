@@ -19,18 +19,23 @@ const CJK_CHARS = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/;
 const HANGUL_CHARS = /[\uac00-\ud7af\u1100-\u11ff]/;
 const KANA_CHARS = /[\u3040-\u309f\u30a0-\u30ff]/;
 
-function detectLangFromText(text) {
+function detectLangFromText(text, srcLang = 'zh', tgtLang = 'vi') {
   if (!text) return null;
   const hasViet = VIET_DIACRITICS.test(text);
   const hasCJK = CJK_CHARS.test(text);
   const hasKorean = HANGUL_CHARS.test(text);
   const hasJapanese = KANA_CHARS.test(text);
 
-  if (hasViet && !hasCJK) return 'vi';
-  if (hasCJK && !hasViet && !hasJapanese && !hasKorean) return 'zh';
+  if (hasViet) return 'vi';
+  if (hasCJK) return 'zh';
   if (hasJapanese) return 'ja';
   if (hasKorean) return 'ko';
-  if (/^[a-zA-Z0-9\s.,!?'"\-:;()]+$/.test(text.trim())) return 'en';
+
+  // Context-aware Latin detection:
+  if (/[a-zA-Z]/.test(text)) {
+    if (srcLang === 'vi' || tgtLang === 'vi') return 'vi';
+    return 'en';
+  }
   return null;
 }
 
@@ -117,6 +122,7 @@ export default function useSimultaneousConversation({
   const accumulatedTextRef = useRef('');
   const currentInterimRef = useRef('');
   const prevSessionsTextRef = useRef('');
+  const activeTtsLangRef = useRef(null);
   const silenceTimeoutRef = useRef(null);
   const stoppingRef = useRef(false);
 
@@ -279,7 +285,9 @@ export default function useSimultaneousConversation({
           );
           if (detectedLocale && detectedLocale !== 'Unknown') {
             const baseLang = detectedLocale.split('-')[0];
-            if (baseLang !== inputLangRef.current) {
+            if (activeTtsLangRef.current === baseLang) {
+              console.log(`🛡️ [Azure AEC Lang Filter] Bỏ qua đổi ngôn ngữ tự động sang "${baseLang}" vì Robot đang phát loa.`);
+            } else if (baseLang !== inputLangRef.current) {
               console.log(`🌐 [Auto-detect interim] ${inputLangRef.current} → ${baseLang}`);
               inputLangRef.current = baseLang;
               setActiveLang(baseLang);
@@ -312,7 +320,9 @@ export default function useSimultaneousConversation({
           );
           if (detectedLocale && detectedLocale !== 'Unknown') {
             const baseLang = detectedLocale.split('-')[0];
-            if (baseLang !== inputLangRef.current) {
+            if (activeTtsLangRef.current === baseLang) {
+              console.log(`🛡️ [Azure AEC Lang Filter] Bỏ qua đổi ngôn ngữ tự động sang "${baseLang}" vì Robot đang phát loa.`);
+            } else if (baseLang !== inputLangRef.current) {
               console.log(`🌐 [Auto-detect FINAL] ${inputLangRef.current} → ${baseLang}`);
               inputLangRef.current = baseLang;
               setActiveLang(baseLang);
@@ -714,10 +724,15 @@ export default function useSimultaneousConversation({
 
     // Nhận dạng ngôn ngữ từ nội dung
     if (autoDetectRef.current) {
-      const textLang = detectLangFromText(text);
+      const textLang = detectLangFromText(text, srcLangCodeRef.current, tgtLangCodeRef.current);
       if (textLang && textLang !== inputLangRef.current) {
-        inputLangRef.current = textLang;
-        setActiveLang(textLang);
+        if (activeTtsLangRef.current === textLang) {
+          console.log(`🛡️ [Text AEC Lang Filter] Bỏ qua đổi ngôn ngữ tự động sang "${textLang}" vì Robot đang phát loa.`);
+        } else {
+          console.log(`🔍 [Text-detect simultaneous] "${text.slice(0, 30)}..." → ${textLang} (was: ${inputLangRef.current})`);
+          inputLangRef.current = textLang;
+          setActiveLang(textLang);
+        }
       }
     }
 
@@ -867,6 +882,8 @@ export default function useSimultaneousConversation({
         } else {
           // Kích hoạt mút mic chống rú âm nếu KHÔNG dùng tai nghe đè
           isSpeakingRef.current = !overlapListeningRef.current;
+          // Lưu lại ngôn ngữ đang phát để chống dội âm nhận diện tự động
+          activeTtsLangRef.current = task.toLang;
           if (onStatusChangeRef.current) onStatusChangeRef.current('speaking');
 
           const ttsRes = await fetch('/api/tts', {
@@ -949,6 +966,9 @@ export default function useSimultaneousConversation({
       console.error(`❌ [Queue Engine Error] #${task.id}:`, err);
       if (onErrorRef.current) onErrorRef.current(err.message);
     } finally {
+      // Giải phóng ngôn ngữ TTS đang phát để khôi phục nhận diện tự động
+      activeTtsLangRef.current = null;
+
       // Khôi phục lại âm lượng phát loa cho lượt dịch tiếp theo
       restoreTtsVolume();
 

@@ -5,12 +5,19 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 const CJK_CHARS = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/;
 const VIET_DIACRITICS = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđĐ]/;
 
-function detectLangFromText(text) {
+function detectLangFromText(text, srcLang = 'zh', tgtLang = 'vi') {
   if (!text) return null;
   const hasViet = VIET_DIACRITICS.test(text);
   const hasCJK = CJK_CHARS.test(text);
-  if (hasViet && !hasCJK) return 'vi';
-  if (hasCJK && !hasViet) return 'zh';
+
+  if (hasViet) return 'vi';
+  if (hasCJK) return 'zh';
+
+  // Context-aware Latin detection:
+  if (/[a-zA-Z]/.test(text)) {
+    if (srcLang === 'vi' || tgtLang === 'vi') return 'vi';
+    return 'en';
+  }
   return null;
 }
 
@@ -138,7 +145,7 @@ export default function useQuickConversation({
     }
 
     // Xác định ngôn ngữ nguồn và đích
-    const textLang = detectLangFromText(text) || inputLangRef.current;
+    const textLang = detectLangFromText(text, srcLangCodeRef.current, tgtLangCodeRef.current) || inputLangRef.current;
     const fromLang = textLang;
     const toLang = fromLang === srcLangCodeRef.current
       ? tgtLangCodeRef.current
