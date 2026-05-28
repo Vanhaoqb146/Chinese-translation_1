@@ -1815,6 +1815,35 @@ body {
   .chat-bubble {
     max-width: 92%;
   }
+
+  /* Biến mode switcher thành thanh cuộn ngang mượt mà trên di động, ẩn scrollbar */
+  .mode-switcher {
+    order: 3;
+    width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+    justify-content: flex-start !important;
+    padding: 6px 8px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; /* Firefox */
+    display: flex;
+    gap: 6px;
+  }
+  
+  .mode-switcher::-webkit-scrollbar {
+    display: none; /* Chrome, Safari, Opera */
+  }
+
+  .mode-switcher button {
+    flex: 0 0 auto; /* Không cho co rút nút, giữ nguyên kích thước để vuốt */
+    padding: 6px 14px;
+    font-size: 12px;
+  }
+
+  /* Đảm bảo bong bóng chat cuối cùng luôn cuộn cao hơn thanh Mic nổi (FAB), tránh bị che */
+  .conv-log.fullscreen-chat .conv-log-body {
+    padding: 14px 14px 105px !important; /* Tăng padding bottom lên 105px trên điện thoại */
+  }
 }
 
 /* Typing cursor blink animation */

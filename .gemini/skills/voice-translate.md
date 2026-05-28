@@ -15,7 +15,7 @@
 ## 📅 General Info & Version
 * **Project Name:** VoiceTranslate AI
 * **Description:** Real-time voice translation app, supporting multi-language, AI-integrated (Whisper + GPT) with a modern Premium Dark Theme interface.
-* **Last Updated:** 2026-05-27
+* **Last Updated:** 2026-05-28
 * **Self-Update Command:** `node scripts/update-skill.js`
 
 ---

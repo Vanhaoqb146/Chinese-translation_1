@@ -356,21 +356,26 @@ export default function useQuickConversation({
       if (isSpeakingRef.current) return;
       isFinalFiredRef.current = false;
 
-      let interim = '';
-      let final = '';
+      let accumulatedText = '';
+      let interimText = '';
+      let hasNewFinal = false;
 
-      for (let i = e.resultIndex; i < e.results.length; i++) {
+      for (let i = 0; i < e.results.length; i++) {
         const transcript = e.results[i][0].transcript;
         if (e.results[i].isFinal) {
-          final += transcript + ' ';
+          accumulatedText += transcript + ' ';
+          if (i >= e.resultIndex) {
+            hasNewFinal = true;
+          }
         } else {
-          interim += transcript;
+          interimText += transcript;
         }
       }
 
-      if (final.trim()) {
-        accumulatedTextRef.current += (accumulatedTextRef.current ? ' ' : '') + final.trim();
-        currentInterimRef.current = '';
+      accumulatedTextRef.current = accumulatedText.trim();
+      currentInterimRef.current = interimText.trim();
+
+      if (hasNewFinal) {
         isFinalFiredRef.current = true;
         
         // Giải quyết hàng đợi chờ isFinal
@@ -378,11 +383,9 @@ export default function useQuickConversation({
           pendingResolveRef.current();
           pendingResolveRef.current = null;
         }
-      } else if (interim.trim()) {
-        currentInterimRef.current = interim.trim();
       }
 
-      const display = accumulatedTextRef.current + (accumulatedTextRef.current && currentInterimRef.current ? ' ' : '') + currentInterimRef.current;
+      const display = (accumulatedTextRef.current + (accumulatedTextRef.current && currentInterimRef.current ? ' ' : '') + currentInterimRef.current).trim();
       if (onInterimTextRef.current) onInterimTextRef.current(display);
 
       resetSilenceTimer();
