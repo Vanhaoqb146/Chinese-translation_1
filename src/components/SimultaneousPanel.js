@@ -121,6 +121,13 @@ export default function SimultaneousPanel({
   const [overlapListening, setOverlapListening] = useState(() =>
     getSessionValue("overlapListening", false),
   );
+  // Enforce: When autoDetect is active, turn off autoTTS and overlapListening to avoid any echo/loop and optimize language detection.
+  useEffect(() => {
+    if (autoDetect) {
+      setAutoTTS(false);
+      setOverlapListening(false);
+    }
+  }, [autoDetect]);
 
   // ===== activeTtsProvider =====
   const activeTtsProvider = provider === "web-speech" ? ttsProvider : provider;
@@ -1358,11 +1365,15 @@ export default function SimultaneousPanel({
                 </div>
 
                 {/* Auto TTS Toggle */}
-                <div className="drawer-row">
+                <div className="drawer-row" style={{ opacity: autoDetect ? 0.6 : 1 }}>
                   <label>{autoTTS ? "🔊" : "🔇"} Tự phát giọng sau dịch</label>
                   <div
-                    className={`toggle-switch ${autoTTS ? "on" : "off"}`}
-                    onClick={() => setAutoTTS(!autoTTS)}
+                    className={`toggle-switch ${autoTTS ? "on" : "off"} ${autoDetect ? "disabled" : ""}`}
+                    onClick={() => {
+                      if (autoDetect) return;
+                      setAutoTTS(!autoTTS);
+                    }}
+                    title={autoDetect ? "Đã khóa tự phát loa khi bật tự nhận dạng ngôn ngữ" : ""}
                   >
                     <div className="toggle-switch-knob" />
                   </div>
@@ -1372,8 +1383,10 @@ export default function SimultaneousPanel({
                 <div
                   style={{
                     fontSize: "11px",
-                    color: autoTTS ? "#6b7280" : "#10b981",
-                    background: autoTTS
+                    color: autoDetect ? "#eab308" : autoTTS ? "#6b7280" : "#10b981",
+                    background: autoDetect
+                      ? "rgba(234,179,8,0.06)"
+                      : autoTTS
                       ? "rgba(255,255,255,0.02)"
                       : "rgba(16,185,129,0.06)",
                     borderRadius: 6,
@@ -1381,12 +1394,16 @@ export default function SimultaneousPanel({
                     marginTop: "-4px",
                     marginBottom: "8px",
                     lineHeight: "1.4",
-                    border: autoTTS
+                    border: autoDetect
+                      ? "1px solid rgba(234,179,8,0.15)"
+                      : autoTTS
                       ? "none"
                       : "1px solid rgba(16,185,129,0.15)",
                   }}
                 >
-                  {autoTTS
+                  {autoDetect
+                    ? "⚠️ Khóa tự động phát và nghe đè khi bật Tự nhận dạng ngôn ngữ để đảm bảo nhận diện nhạy bén nhất, tránh dội âm gây nhầm lẫn."
+                    : autoTTS
                     ? "💡 Máy sẽ tự động đọc to bản dịch ngay khi xử lý xong."
                     : "💡 Tắt đọc giúp hệ thống dịch hiển thị chữ liên tục, hoàn toàn không rú âm, không cần tai nghe."}
                 </div>
