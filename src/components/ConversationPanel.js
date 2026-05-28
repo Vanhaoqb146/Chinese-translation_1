@@ -131,6 +131,13 @@ export default function ConversationPanel({
     } catch { /* ignore */ }
   }, [provider, ttsProvider, speed, silenceSeconds, srcVoice, tgtVoice, autoDetect, micMode, autoTTS, fontSize, muteSrc, muteTgt]);
 
+  // Enforce: autoDetect is ONLY compatible with 'azure' provider.
+  useEffect(() => {
+    if (provider !== 'azure' && autoDetect) {
+      setAutoDetect(false);
+    }
+  }, [provider, autoDetect]);
+
   // Auto reset voices when activeTtsProvider changes
   useEffect(() => {
     if (activeTtsProvider === 'elevenlabs') {
@@ -717,15 +724,35 @@ export default function ConversationPanel({
                 <div className="drawer-section-title">🎤 Chế độ micro</div>
 
                 {/* Auto detect toggle */}
-                <div className="drawer-row">
+                <div className="drawer-row" style={{ opacity: provider !== 'azure' ? 0.6 : 1 }}>
                   <label>🌐 Tự nhận dạng ngôn ngữ</label>
                   <div
-                    className={`toggle-switch ${autoDetect ? 'on' : 'off'} ${conv.isListening ? 'disabled' : ''}`}
-                    onClick={() => !conv.isListening && setAutoDetect(!autoDetect)}
+                    className={`toggle-switch ${autoDetect ? 'on' : 'off'} ${conv.isListening || provider !== 'azure' ? 'disabled' : ''}`}
+                    onClick={() => !conv.isListening && provider === 'azure' && setAutoDetect(!autoDetect)}
+                    title={provider !== 'azure' ? "Chỉ hỗ trợ tự nhận dạng ngôn ngữ khi sử dụng công cụ Azure" : ""}
                   >
                     <div className="toggle-switch-knob" />
                   </div>
                 </div>
+
+                {/* Helper text if not Azure */}
+                {provider !== 'azure' && (
+                  <div
+                    style={{
+                      fontSize: '11px',
+                      color: '#9ca3af',
+                      background: 'rgba(255,255,255,0.02)',
+                      borderRadius: 6,
+                      padding: '5px 8px',
+                      marginTop: '-4px',
+                      marginBottom: '8px',
+                      lineHeight: '1.4',
+                      border: '1px dashed rgba(255,255,255,0.05)',
+                    }}
+                  >
+                    💡 Chỉ khả dụng khi sử dụng công cụ STT Azure.
+                  </div>
+                )}
 
                 {/* Auto TTS toggle */}
                 <div className="drawer-row">

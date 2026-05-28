@@ -667,6 +667,7 @@ export default function useRealtimeConversation({
           webSpeechRecRef.current.abort();
         } catch (e) { /* ignore */ }
         webSpeechRecRef.current = null;
+        isMicRunningRef.current = false;
       }
     } else if (providerRef.current === 'elevenlabs') {
       // Cleanup ElevenLabs

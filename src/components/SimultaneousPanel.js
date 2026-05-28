@@ -129,6 +129,13 @@ export default function SimultaneousPanel({
     }
   }, [autoDetect]);
 
+  // Enforce: autoDetect is ONLY compatible with 'azure' provider.
+  useEffect(() => {
+    if (provider !== 'azure' && autoDetect) {
+      setAutoDetect(false);
+    }
+  }, [provider, autoDetect]);
+
   // ===== activeTtsProvider =====
   const activeTtsProvider = provider === "web-speech" ? ttsProvider : provider;
 
@@ -1352,17 +1359,37 @@ export default function SimultaneousPanel({
                 <div className="drawer-section-title">⚡ Cấu hình liên tục</div>
 
                 {/* Auto Language detect */}
-                <div className="drawer-row">
+                <div className="drawer-row" style={{ opacity: provider !== 'azure' ? 0.6 : 1 }}>
                   <label>🌐 Tự nhận dạng ngôn ngữ</label>
                   <div
-                    className={`toggle-switch ${autoDetect ? "on" : "off"} ${conv.isListening ? "disabled" : ""}`}
+                    className={`toggle-switch ${autoDetect ? "on" : "off"} ${conv.isListening || provider !== 'azure' ? "disabled" : ""}`}
                     onClick={() =>
-                      !conv.isListening && setAutoDetect(!autoDetect)
+                      !conv.isListening && provider === 'azure' && setAutoDetect(!autoDetect)
                     }
+                    title={provider !== 'azure' ? "Chỉ hỗ trợ tự nhận dạng ngôn ngữ khi sử dụng công cụ Azure" : ""}
                   >
                     <div className="toggle-switch-knob" />
                   </div>
                 </div>
+
+                {/* Helper text if not Azure */}
+                {provider !== 'azure' && (
+                  <div
+                    style={{
+                      fontSize: '11px',
+                      color: '#9ca3af',
+                      background: 'rgba(255,255,255,0.02)',
+                      borderRadius: 6,
+                      padding: '5px 8px',
+                      marginTop: '-4px',
+                      marginBottom: '8px',
+                      lineHeight: '1.4',
+                      border: '1px dashed rgba(255,255,255,0.05)',
+                    }}
+                  >
+                    💡 Chỉ khả dụng khi sử dụng công cụ STT Azure.
+                  </div>
+                )}
 
                 {/* Auto TTS Toggle */}
                 <div className="drawer-row" style={{ opacity: autoDetect ? 0.6 : 1 }}>
