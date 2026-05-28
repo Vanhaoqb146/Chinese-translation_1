@@ -759,6 +759,15 @@ export default function useSimultaneousConversation({
       } catch (e) { /* ignore */ }
     }
 
+    // For Azure autoDetect: restart recognizer to reset Azure's auto-detect language session memory.
+    // This avoids getting "stuck" in a single language acoustic model.
+    if (providerRef.current === 'azure' && autoDetectRef.current && recognizerRef.current) {
+      console.log('🔄 [Auto-detect Azure] Khởi động lại recognizer để reset bộ nhớ ngôn ngữ...');
+      setupRecognizer(inputLangRef.current).catch(err => {
+        console.warn('⚠️ Lỗi khởi động lại Azure recognizer:', err);
+      });
+    }
+
     const taskId = ++msgIdRef.current;
     console.log(`📦 [Queue] Đẩy tác vụ #${taskId} vào hàng đợi: "${taskText.slice(0, 50)}..."`);
     
@@ -772,7 +781,7 @@ export default function useSimultaneousConversation({
 
     // Kích hoạt xử lý hàng đợi
     processTranslationQueue();
-  }, []);
+  }, [setupRecognizer]);
 
   // ====== PROCESS QUEUE: Xử lý các tác vụ dịch tuần tự ======
   const processTranslationQueue = useCallback(async () => {
