@@ -50,6 +50,7 @@ export default function useQuickConversation({
 
   const accumulatedTextRef = useRef('');
   const currentInterimRef = useRef('');
+  const prevSessionsTextRef = useRef('');
   const silenceTimeoutRef = useRef(null);
   const isFinalFiredRef = useRef(false); // Đánh dấu đã nhận được kết quả isFinal cuối cùng
   const pendingResolveRef = useRef(null); // Resolve promise khi nhận được isFinal
@@ -337,6 +338,8 @@ export default function useQuickConversation({
       throw new Error('Trình duyệt của bạn không hỗ trợ Web Speech API. Hãy dùng Google Chrome.');
     }
 
+    prevSessionsTextRef.current = accumulatedTextRef.current;
+
     const rec = new SpeechRecognition();
     rec.continuous = true; // Thu âm liên tục để có interim chạy mượt mà
     rec.interimResults = true;
@@ -356,24 +359,46 @@ export default function useQuickConversation({
       if (isSpeakingRef.current) return;
       isFinalFiredRef.current = false;
 
-      let accumulatedText = '';
-      let interimText = '';
+      let sessionFinalText = '';
+      let sessionInterimText = '';
       let hasNewFinal = false;
 
       for (let i = 0; i < e.results.length; i++) {
-        const transcript = e.results[i][0].transcript;
+        const transcript = e.results[i][0].transcript.trim();
         if (e.results[i].isFinal) {
-          accumulatedText += transcript + ' ';
           if (i >= e.resultIndex) {
             hasNewFinal = true;
           }
+          if (!sessionFinalText) {
+            sessionFinalText = transcript;
+          } else {
+            const cleanAcc = sessionFinalText.trim().toLowerCase();
+            const cleanTrans = transcript.toLowerCase();
+            if (cleanTrans.startsWith(cleanAcc)) {
+              sessionFinalText = transcript;
+            } else {
+              sessionFinalText += ' ' + transcript;
+            }
+          }
         } else {
-          interimText += transcript;
+          if (!sessionInterimText) {
+            sessionInterimText = transcript;
+          } else {
+            const cleanInt = sessionInterimText.trim().toLowerCase();
+            const cleanTrans = transcript.toLowerCase();
+            if (cleanTrans.startsWith(cleanInt)) {
+              sessionInterimText = transcript;
+            } else {
+              sessionInterimText += ' ' + transcript;
+            }
+          }
         }
       }
 
-      accumulatedTextRef.current = accumulatedText.trim();
-      currentInterimRef.current = interimText.trim();
+      // Ghép văn bản của phiên hiện tại vào văn bản tích lũy của các phiên trước
+      const prev = prevSessionsTextRef.current || '';
+      accumulatedTextRef.current = prev + (prev && sessionFinalText ? ' ' : '') + sessionFinalText;
+      currentInterimRef.current = sessionInterimText;
 
       if (hasNewFinal) {
         isFinalFiredRef.current = true;
@@ -422,6 +447,7 @@ export default function useQuickConversation({
     try {
       accumulatedTextRef.current = '';
       currentInterimRef.current = '';
+      prevSessionsTextRef.current = '';
       isSpeakingRef.current = false;
       isFinalFiredRef.current = false;
       pendingResolveRef.current = null;

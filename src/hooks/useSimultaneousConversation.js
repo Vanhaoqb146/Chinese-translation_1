@@ -116,6 +116,7 @@ export default function useSimultaneousConversation({
 
   const accumulatedTextRef = useRef('');
   const currentInterimRef = useRef('');
+  const prevSessionsTextRef = useRef('');
   const silenceTimeoutRef = useRef(null);
   const stoppingRef = useRef(false);
 
@@ -481,6 +482,8 @@ export default function useSimultaneousConversation({
       throw new Error('Trình duyệt không hỗ trợ Web Speech API.');
     }
 
+    prevSessionsTextRef.current = accumulatedTextRef.current;
+
     const rec = new SpeechRecognition();
     rec.continuous = true;
     rec.interimResults = true;
@@ -505,24 +508,46 @@ export default function useSimultaneousConversation({
         duckTtsVolume();
       }
 
-      let accumulatedText = '';
-      let interimText = '';
+      let sessionFinalText = '';
+      let sessionInterimText = '';
       let hasNewFinal = false;
 
       for (let i = 0; i < e.results.length; i++) {
-        const transcript = e.results[i][0].transcript;
+        const transcript = e.results[i][0].transcript.trim();
         if (e.results[i].isFinal) {
-          accumulatedText += transcript + ' ';
           if (i >= e.resultIndex) {
             hasNewFinal = true;
           }
+          if (!sessionFinalText) {
+            sessionFinalText = transcript;
+          } else {
+            const cleanAcc = sessionFinalText.trim().toLowerCase();
+            const cleanTrans = transcript.toLowerCase();
+            if (cleanTrans.startsWith(cleanAcc)) {
+              sessionFinalText = transcript;
+            } else {
+              sessionFinalText += ' ' + transcript;
+            }
+          }
         } else {
-          interimText += transcript;
+          if (!sessionInterimText) {
+            sessionInterimText = transcript;
+          } else {
+            const cleanInt = sessionInterimText.trim().toLowerCase();
+            const cleanTrans = transcript.toLowerCase();
+            if (cleanTrans.startsWith(cleanInt)) {
+              sessionInterimText = transcript;
+            } else {
+              sessionInterimText += ' ' + transcript;
+            }
+          }
         }
       }
 
-      accumulatedTextRef.current = accumulatedText.trim();
-      currentInterimRef.current = interimText.trim();
+      // Ghép văn bản của phiên hiện tại vào văn bản tích lũy của các phiên trước
+      const prev = prevSessionsTextRef.current || '';
+      accumulatedTextRef.current = prev + (prev && sessionFinalText ? ' ' : '') + sessionFinalText;
+      currentInterimRef.current = sessionInterimText;
 
       if (hasNewFinal) {
         isWebSpeechFinalFiredRef.current = true;
@@ -970,6 +995,7 @@ export default function useSimultaneousConversation({
     try {
       accumulatedTextRef.current = '';
       currentInterimRef.current = '';
+      prevSessionsTextRef.current = '';
       isSpeakingRef.current = false;
       stoppingRef.current = false;
       inputLangRef.current = inputLang;
