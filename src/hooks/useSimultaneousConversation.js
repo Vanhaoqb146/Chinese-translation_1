@@ -110,6 +110,9 @@ export default function useSimultaneousConversation({
   const elStreamRef = useRef(null);
   const azureStreamRef = useRef(null);
   const bgStreamRef = useRef(null);
+  const azureTokenRef = useRef(null);
+  const azureTokenRegionRef = useRef(null);
+  const azureTokenExpiryRef = useRef(0);
 
   // WebSpeech-specific refs
   const webSpeechRecRef = useRef(null);
@@ -218,37 +221,56 @@ export default function useSimultaneousConversation({
       try { recognizerRef.current.close(); } catch (e) { console.warn('⚠️ [Close old recognizer]', e); }
       recognizerRef.current = null;
     }
-    if (azureStreamRef.current) {
-      try { azureStreamRef.current.getTracks().forEach(t => t.stop()); } catch (e) { /* ignore */ }
-      azureStreamRef.current = null;
+
+    // Tái sử dụng token Azure đã cache nếu còn hạn
+    let token = azureTokenRef.current;
+    let region = azureTokenRegionRef.current;
+    if (!token || Date.now() > azureTokenExpiryRef.current) {
+      console.log('🔑 [Azure Token] Đang fetch token mới...');
+      const tokenRes = await fetch('/api/azure/token');
+      const tokenData = await tokenRes.json();
+      if (!tokenData.token) throw new Error('No Azure Speech token');
+
+      azureTokenRef.current = tokenData.token;
+      azureTokenRegionRef.current = tokenData.region;
+      azureTokenExpiryRef.current = Date.now() + 8 * 60 * 1000; // Cache 8 phút
+      token = tokenData.token;
+      region = tokenData.region;
+    } else {
+      console.log('🔑 [Azure Token] Sử dụng lại token đã cache');
     }
 
-    const tokenRes = await fetch('/api/azure/token');
-    const tokenData = await tokenRes.json();
-    if (!tokenData.token) throw new Error('No Azure Speech token');
-
-    console.log(`🔑 [setupRecognizer] Azure token region=${tokenData.region}, lang=${inputLang}`);
+    console.log(`🔑 [setupRecognizer] Azure token region=${region}, lang=${inputLang}`);
 
     const sdk = await import('microsoft-cognitiveservices-speech-sdk');
-    const speechConfig = sdk.SpeechConfig.fromAuthorizationToken(tokenData.token, tokenData.region);
+    const speechConfig = sdk.SpeechConfig.fromAuthorizationToken(token, region);
     speechConfig.setProperty('Speech_SegmentationSilenceTimeoutMs', '2000');
 
     const langMap = { zh: 'zh-CN', vi: 'vi-VN', en: 'en-US', ja: 'ja-JP', ko: 'ko-KR' };
     const primaryLang = langMap[inputLang] || `${inputLang}-${inputLang.toUpperCase()}`;
 
-    // Tạo MediaStream tùy chỉnh chống méo tiếng / triệt tiêu âm của Chrome
-    let stream = null;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        }
-      });
-      azureStreamRef.current = stream;
-    } catch (err) {
-      console.warn('⚠️ [setupRecognizer] Không thể lấy Custom MediaStream, dùng mic mặc định:', err);
+    // Tạo hoặc tái sử dụng MediaStream tùy chỉnh tránh gọi getUserMedia liên tục dồn ép browser
+    let stream = azureStreamRef.current;
+    if (!stream || stream.getTracks().every(t => t.readyState === 'ended')) {
+      if (azureStreamRef.current) {
+        try { azureStreamRef.current.getTracks().forEach(t => t.stop()); } catch (e) { /* ignore */ }
+      }
+      try {
+        console.log('🎙️ [getUserMedia] Khởi tạo Custom MediaStream...');
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+        azureStreamRef.current = stream;
+      } catch (err) {
+        console.warn('⚠️ [setupRecognizer] Không thể lấy Custom MediaStream, dùng mic mặc định:', err);
+        stream = null;
+      }
+    } else {
+      console.log('🎙️ [getUserMedia] Sử dụng lại Stream Micro đang hoạt động');
     }
 
     let audioConfig;
@@ -306,6 +328,7 @@ export default function useSimultaneousConversation({
       currentInterimRef.current = transcript;
       const display = accumulatedTextRef.current + (accumulatedTextRef.current ? ' ' : '') + transcript;
       if (onInterimTextRef.current) onInterimTextRef.current(display);
+      resetSilenceTimer();
     };
 
     recognizer.recognized = (s, e) => {
@@ -453,6 +476,7 @@ export default function useSimultaneousConversation({
           currentInterimRef.current = transcript;
           const display = accumulatedTextRef.current + (accumulatedTextRef.current ? ' ' : '') + transcript;
           if (onInterimTextRef.current) onInterimTextRef.current(display);
+          resetSilenceTimer();
         }
 
         if (messageType === 'committed_transcript') {
