@@ -214,6 +214,30 @@ function buildConversationalSSML(text, voiceName, lang) {
   return { ssml, normalized };
 }
 
+export async function GET(request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const text = searchParams.get('text');
+    const lang = searchParams.get('lang');
+    const voice = searchParams.get('voice');
+    const voiceId = searchParams.get('voiceId');
+    const provider = searchParams.get('provider') || 'azure';
+
+    if (!text || text.trim().length === 0) {
+      return Response.json({ error: 'No text provided' }, { status: 400 });
+    }
+
+    if (provider === 'elevenlabs') {
+      return await handleElevenLabsTTS(text, lang, voice || voiceId);
+    }
+
+    return await handleAzureTTS(text, lang, voice, voiceId);
+  } catch (err) {
+    console.error('🔊 [TTS GET] Error:', err);
+    return Response.json({ error: err.message || 'TTS failed' }, { status: 500 });
+  }
+}
+
 export async function POST(request) {
   try {
     const { text, lang, voice, voiceId, provider = 'azure' } = await request.json();

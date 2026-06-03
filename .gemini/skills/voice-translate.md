@@ -15,7 +15,8 @@
 ## 📅 General Info & Version
 * **Project Name:** VoiceTranslate AI
 * **Description:** Real-time voice translation app, supporting multi-language, AI-integrated (Whisper + GPT) with a modern Premium Dark Theme interface.
-* **Last Updated:** 2026-05-28
+* **Target Platforms:** Next.js Web App + Native Mobile App (Android/iOS via Expo SDK 54)
+* **Last Updated:** 2026-06-03
 * **Self-Update Command:** `node scripts/update-skill.js`
 
 ---
@@ -33,11 +34,51 @@ Chinese-translation_1/
 │   ├── localhost-key.pem
 │   └── localhost.pem
 ├── data/
+│   ├── browser_storage_snippets_20260529T072521Z.json
+│   ├── browser_storage_snippets_20260529T072701Z.json
+│   ├── cache_history_candidates_20260529T073632Z.json
+│   ├── conversation_history_after_restore_20260529T073854Z.json
+│   ├── conversation_history_backup_20260529T072300Z.json
+│   ├── conversation_history_pre_restore_20260529T073733Z.json
+│   ├── conversation_history_timetravel_20260529T070900Z.json
+│   ├── recovered_history_candidates_20260529T072701Z.json
 │   └── users.json
 ├── docs/
 │   ├── HD tạo API MICROSOFT AZURE.docx
 │   ├── Hướng dẫn sử dụng_VoiceTranslate_AI.docx
 │   └── Hướng dẫn tạo API_elevenlabs.docx
+├── mobile/
+│   ├── .expo/
+│   │   ├── dev/
+│   │   │   └── logs/
+│   │   │       └── start.log
+│   │   ├── devices.json
+│   │   └── README.md
+│   ├── assets/
+│   │   ├── android-icon-background.png
+│   │   ├── android-icon-foreground.png
+│   │   ├── android-icon-monochrome.png
+│   │   ├── favicon.png
+│   │   ├── icon.png
+│   │   └── splash-icon.png
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── ConversationPanel.js
+│   │   │   ├── QuickTalkPanel.js
+│   │   │   ├── SimultaneousPanel.js
+│   │   │   └── StandardPanel.js
+│   │   ├── lib/
+│   │   │   └── translationModels.js
+│   │   ├── services/
+│   │   │   └── api.js
+│   │   └── theme.js
+│   ├── .gitignore
+│   ├── App.js
+│   ├── app.json
+│   ├── index.js
+│   ├── LICENSE
+│   ├── package-lock.json
+│   └── package.json
 ├── public/
 │   ├── file.svg
 │   ├── globe.svg
@@ -45,7 +86,11 @@ Chinese-translation_1/
 │   ├── vercel.svg
 │   └── window.svg
 ├── scripts/
+│   ├── export-history-at-time.mjs
+│   ├── extract-browser-history.mjs
+│   ├── extract-cache-history.mjs
 │   ├── init-db.js
+│   ├── restore-cache-history.mjs
 │   └── update-skill.js
 ├── src/
 │   ├── app/
@@ -97,13 +142,15 @@ Chinese-translation_1/
 │   │   ├── useSimultaneousConversation.js
 │   │   ├── useSpeechRecognition.js
 │   │   └── useTranslation.js
-│   └── lib/
-│       ├── auth.js
-│       └── translationModels.js
+│   ├── lib/
+│   │   ├── auth.js
+│   │   └── translationModels.js
+│   └── middleware.js
 ├── .gitignore
 ├── eslint.config.mjs
 ├── jsconfig.json
 ├── next.config.mjs
+├── Note.txt
 ├── package-lock.json
 ├── package.json
 ├── project_skill.md
@@ -130,6 +177,16 @@ Core dependencies read directly from `package.json`:
 | `eslint-config-next` | `16.1.6` | Standard Next.js eslint config |
 
 <!-- SKILL_DEP_END -->
+
+### Mobile Application Tech Stack & Dependencies
+* **Framework:** Expo SDK 54 (React Native 0.81.0, React 19.1.0)
+* **Core Libraries:**
+  | Library | Version | Role in Project |
+  |---------|---------|-----------------|
+  | `expo` | `~54.0.0` | React Native wrapper framework |
+  | `expo-av` | `~15.0.1` | Native Audio recording, metering and playback |
+  | `expo-secure-store` | `~14.0.1` | Secure hardware credentials & API settings sandbox |
+  | `react-native` | `0.81.0` | Mobile framework core |
 
 ---
 
@@ -186,6 +243,12 @@ Designed for hands-free double-talk communication. The mic remains active while 
 A lightweight conversational view that prioritizes sub-50ms responsiveness by hardcoding the native browser Web Speech API for speech recognition (STT).
 * **Speed-optimized Design:** STT is permanently locked to Web Speech API to bypass all network cold-start delays.
 * **Speech Provider Options:** The Speech Provider setting allows directly configuring the Cloud TTS engine (Azure / ElevenLabs) for text-to-speech feedback, maintaining a distinct fast-speech configuration structure separate from standard Conversation mode.
+
+### 5. Mobile Companion App Integration
+Bridges native hardware capabilities with the Next.js backend to provide full feature parity on Android and iOS:
+* **Server & Settings Sync:** Dynamic API base URL configuration allowing seamless switching between local development server IP (`http://192.168.1.XX:3000`) and Vercel cloud environment (`https://chinese-translation1.vercel.app`). Credentials (JWT/username) and configs (API key, selected model) are stored locally in the secure storage sandbox.
+* **Unified History PostgreSQL Integration:** Translating on mobile dynamically invokes `api.saveHistory()` under the logged-in user context, instantly saving records in the Vercel Postgres remote database to sync history seamlessly with the web portal.
+* **Universal Split-Screen Viewport:** Rotating the top viewport `180°` allows face-to-face turn-taking, enabling users to place the phone between them while maintaining real-time reading orientation for both parties.
 
 ---
 
@@ -272,6 +335,11 @@ When modifying code, **never compromise** these established edge-case workaround
 10. **React useEffect Ref Update Lag:** Updating stable refs inside `useEffect` without a dependency array can introduce scheduling lags, because `useEffect` runs after the commit phase. If a user event (e.g., pointerdown triggering STT start) runs synchronously, callbacks might execute *before* the ref is updated, causing closure bugs. Resolve this by updating all stable refs **synchronously during the render phase** (directly in the custom hook body), ensuring that all callbacks instantly read up-to-date values.
 11. **Web Speech API Interim Text Loss on Stop:** In Web Speech API, speech recognition is asynchronous and finalizes words in segments. When a user stops speaking or releases the button in Hold-to-Talk, the final words are often still in the interim buffer (`isFinal === false`) and finalization can take up to 1 second. If the translation pipeline is triggered immediately using only the finalized accumulated text buffer, the trailing words in the interim buffer are discarded and lost. Furthermore, if `isFinalFiredRef` (or `isWebSpeechFinalFiredRef`) is set to `true` by any earlier segment in the session, standard trailing timers might bypass the wait delay prematurely. Resolve this by: (1) concatenating the active interim text buffer with the accumulated text buffer when translating or queuing, and (2) ensuring that the 150ms finalization wait is only bypassed when there is absolutely no active interim text left (checking `!currentInterimRef.current.trim()`), rather than checking the stale `isFinalFired` status.
 12. **Speech-activated Audio Ducking (Simultaneous Mode):** In simultaneous translation, active double-talk creates acoustic feedback since the speaker plays audio while the microphone is capturing speech. Standard hardware Echo Cancellation (AEC) fails to mathematically cancel extremely loud audio leakage without also dampening the starting syllables of the user's voice, leading to severe STT distortion and lost words from the second turn onwards. Resolve this by: (1) implementing proactive Audio Ducking, where the system instantly lowers the HTMLAudioElement volume of the TTS playback to `0.50` (50%) as soon as any STT callback (Web Speech `onresult`, Azure `recognizing`/`recognized`, or ElevenLabs `ws.onmessage` partial/committed transcript) yields non-empty interim or final speech data, and (2) automatically restoring the volume to `1.0` (100%) in the `finally` block of the sequential translation queue processor before starting the next segment.
+13. **Path Isolation under Metro Bundler (Expo SDK 54):** Metro does not permit symlinking or importing files outside the project root directory (e.g., `../src/lib/translationModels`). To circumvent this, the model configurations `translationModels.js` are replicated into the `/mobile/src/lib/` subdirectory.
+14. **Top Status Bar & Android Notch Collision:** SafeAreaView on React Native iOS works natively, but on Android it fails to protect the top status bar/notch, resulting in UI overlap. Avoid this by adding platform-specific conditional padding: `paddingTop: Platform.OS === 'android' ? 42 : 0` to the topmost layout container.
+15. **Microphone Lifecycle Conflicts (`expo-av`):** Quick clicking or state transitions can throw `Only one Recording object can be prepared at a given time` or crash the app. This is resolved by tracking recording references synchronously in useRefs (`recordingRef`, `isRecordingRef`), ensuring that `.stopAndUnloadAsync()` is immediately invoked and completed before preparing any new recording objects.
+16. **Audio Ducking via Hardware Metering:** Since mobile lacks direct Web Audio API and SpeechRecognition interfaces, proactive volume ducking in Simultaneous/Conversation modes is achieved by enabling `isMeteringEnabled: true` in the `expo-av` recording status, monitoring the sound levels, and dynamically calling `sound.setVolumeAsync(0.4)` if decibels exceed `-35dB`, restoring to `1.0` once silence drops below `-48dB` for 10 consecutive ticks (1 second).
+17. **Expo Go Compatibility Boundary:** The companion app must strictly limit dependencies to standard libraries bundled with Expo Go. Using custom native modules that require dev client binaries will prevent the user from using Expo Go.
 
 ---
 

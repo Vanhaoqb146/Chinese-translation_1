@@ -121,13 +121,10 @@ export default function SimultaneousPanel({
   const [overlapListening, setOverlapListening] = useState(() =>
     getSessionValue("overlapListening", false),
   );
-  // Enforce: When autoDetect is active, turn off autoTTS and overlapListening to avoid any echo/loop and optimize language detection.
-  useEffect(() => {
-    if (autoDetect) {
-      setAutoTTS(false);
-      setOverlapListening(false);
-    }
-  }, [autoDetect]);
+  const [useHeadphones, setUseHeadphones] = useState(() =>
+    getSessionValue("useHeadphones", true),
+  );
+
 
   // Enforce: autoDetect is ONLY compatible with 'azure' provider.
   useEffect(() => {
@@ -195,6 +192,10 @@ export default function SimultaneousPanel({
         "vt_setting_sim_overlapListening",
         JSON.stringify(overlapListening),
       );
+      sessionStorage.setItem(
+        "vt_setting_sim_useHeadphones",
+        JSON.stringify(useHeadphones),
+      );
     } catch {
       /* ignore */
     }
@@ -212,6 +213,7 @@ export default function SimultaneousPanel({
     muteSrc,
     muteTgt,
     overlapListening,
+    useHeadphones,
   ]);
 
   // Auto reset voices when activeTtsProvider changes
@@ -334,6 +336,7 @@ export default function SimultaneousPanel({
     provider,
     ttsProvider,
     overlapListening,
+    useHeadphones,
     speed,
     echoCancellationAI: overlapListening,
     onInterimText: handleInterimText,
@@ -1392,15 +1395,13 @@ export default function SimultaneousPanel({
                 )}
 
                 {/* Auto TTS Toggle */}
-                <div className="drawer-row" style={{ opacity: autoDetect ? 0.6 : 1 }}>
+                <div className="drawer-row">
                   <label>{autoTTS ? "🔊" : "🔇"} Tự phát giọng sau dịch</label>
                   <div
-                    className={`toggle-switch ${autoTTS ? "on" : "off"} ${autoDetect ? "disabled" : ""}`}
+                    className={`toggle-switch ${autoTTS ? "on" : "off"}`}
                     onClick={() => {
-                      if (autoDetect) return;
                       setAutoTTS(!autoTTS);
                     }}
-                    title={autoDetect ? "Đã khóa tự phát loa khi bật tự nhận dạng ngôn ngữ" : ""}
                   >
                     <div className="toggle-switch-knob" />
                   </div>
@@ -1410,8 +1411,8 @@ export default function SimultaneousPanel({
                 <div
                   style={{
                     fontSize: "11px",
-                    color: autoDetect ? "#eab308" : autoTTS ? "#6b7280" : "#10b981",
-                    background: autoDetect
+                    color: autoDetect && autoTTS ? "#eab308" : autoTTS ? "#6b7280" : "#10b981",
+                    background: autoDetect && autoTTS
                       ? "rgba(234,179,8,0.06)"
                       : autoTTS
                       ? "rgba(255,255,255,0.02)"
@@ -1421,15 +1422,15 @@ export default function SimultaneousPanel({
                     marginTop: "-4px",
                     marginBottom: "8px",
                     lineHeight: "1.4",
-                    border: autoDetect
+                    border: autoDetect && autoTTS
                       ? "1px solid rgba(234,179,8,0.15)"
                       : autoTTS
                       ? "none"
                       : "1px solid rgba(16,185,129,0.15)",
                   }}
                 >
-                  {autoDetect
-                    ? "⚠️ Khóa tự động phát và nghe đè khi bật Tự nhận dạng ngôn ngữ để đảm bảo nhận diện nhạy bén nhất, tránh dội âm gây nhầm lẫn."
+                  {autoDetect && autoTTS
+                    ? "🎧 Khuyên dùng tai nghe: Bạn đang bật Tự nhận dạng ngôn ngữ và Tự phát loa. Hãy đeo tai nghe để tránh tiếng từ loa ngoài dội lại mic gây vọng lặp âm."
                     : autoTTS
                     ? "💡 Máy sẽ tự động đọc to bản dịch ngay khi xử lý xong."
                     : "💡 Tắt đọc giúp hệ thống dịch hiển thị chữ liên tục, hoàn toàn không rú âm, không cần tai nghe."}
@@ -1453,11 +1454,48 @@ export default function SimultaneousPanel({
                         <div className="toggle-switch-knob" />
                       </div>
                     </div>
+
+                    {overlapListening && (
+                      <div
+                        className="drawer-row"
+                        style={{
+                          paddingLeft: "15px",
+                          marginTop: "-2px",
+                          marginBottom: "6px",
+                          borderLeft: "2px solid rgba(139,92,246,0.3)",
+                        }}
+                      >
+                        <label style={{ fontSize: "12px", color: "var(--text2)" }}>
+                          🔌 Tôi đang đeo tai nghe
+                        </label>
+                        <div
+                          className={`toggle-switch ${useHeadphones ? "on" : "off"}`}
+                          onClick={() => setUseHeadphones(!useHeadphones)}
+                        >
+                          <div className="toggle-switch-knob" />
+                        </div>
+                      </div>
+                    )}
+
                     <div
                       style={{
                         fontSize: "11px",
-                        color: overlapListening ? "#10b981" : "#6b7280",
-                        background: overlapListening
+                        color: autoDetect && overlapListening && !useHeadphones
+                          ? "#ef4444"
+                          : autoDetect && overlapListening
+                          ? "#eab308"
+                          : overlapListening && !useHeadphones
+                          ? "#eab308"
+                          : overlapListening
+                          ? "#10b981"
+                          : "#6b7280",
+                        background: autoDetect && overlapListening && !useHeadphones
+                          ? "rgba(239,68,68,0.06)"
+                          : autoDetect && overlapListening
+                          ? "rgba(234,179,8,0.06)"
+                          : overlapListening && !useHeadphones
+                          ? "rgba(234,179,8,0.06)"
+                          : overlapListening
                           ? "rgba(16,185,129,0.06)"
                           : "rgba(255,255,255,0.02)",
                         borderRadius: 6,
@@ -1465,13 +1503,25 @@ export default function SimultaneousPanel({
                         marginTop: "-4px",
                         marginBottom: "8px",
                         lineHeight: "1.4",
-                        border: overlapListening
+                        border: autoDetect && overlapListening && !useHeadphones
+                          ? "1px solid rgba(239,68,68,0.15)"
+                          : autoDetect && overlapListening
+                          ? "1px solid rgba(234,179,8,0.15)"
+                          : overlapListening && !useHeadphones
+                          ? "1px solid rgba(234,179,8,0.15)"
+                          : overlapListening
                           ? "1px solid rgba(16,185,129,0.15)"
                           : "none",
                       }}
                     >
-                      {overlapListening
-                        ? "🟢 BẬT: Micro mở liên tục kể cả khi robot đang phát tiếng. Bộ lọc AI tự động lọc bỏ tiếng từ loa ngoài dội lại để tránh dịch lặp âm."
+                      {autoDetect && overlapListening
+                        ? (useHeadphones
+                            ? "🎧 Tự nhận dạng + Tai nghe: Âm lượng phát dịch hạ xuống 80% khi nói. Hãy đeo tai nghe để tránh tiếng vọng dội lại mic gây lặp dịch."
+                            : "🚨 BẮT BUỘC đeo tai nghe: Khi bật Tự nhận dạng + Nghe đè mà dùng loa ngoài, tiếng dội âm sẽ dễ dàng gây ra vòng lặp dịch vô hạn (âm phát dội lại hạ xuống 50% khi nói).")
+                        : overlapListening
+                        ? (useHeadphones
+                            ? "🟢 Đã bật Nghe đè (Tai nghe): Âm lượng robot tự hạ xuống 80% khi bạn nói để nghe rõ bản dịch bám đuổi."
+                            : "⚠️ Nghe đè (Loa ngoài): Âm lượng robot tự hạ sâu xuống 50% khi bạn nói để giảm tiếng vọng dội ngược vào micro.")
                         : "💡 Tắt: Micro tạm đóng khi robot phát tiếng để chống rú vọng âm."}
                     </div>
                   </>

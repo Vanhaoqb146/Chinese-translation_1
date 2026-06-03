@@ -80,6 +80,7 @@ export default function useSimultaneousConversation({
   provider = 'azure', // 'azure' | 'elevenlabs' | 'web-speech'
   ttsProvider = 'azure', // 'azure' | 'elevenlabs'
   overlapListening = false, // Headphones mode: microphone remains active during TTS playback
+  useHeadphones = true,     // Bật chế độ đeo tai nghe khi nghe đè
   speed = 1.0,              // Tốc độ phát giọng nói
   echoCancellationAI = false,
   onInterimText,
@@ -149,6 +150,7 @@ export default function useSimultaneousConversation({
   const providerRef = useRef(provider);
   const ttsProviderRef = useRef(ttsProvider);
   const overlapListeningRef = useRef(overlapListening);
+  const useHeadphonesRef = useRef(useHeadphones);
   const speedRef = useRef(speed);
   const echoCancellationAIRef = useRef(echoCancellationAI);
 
@@ -168,6 +170,7 @@ export default function useSimultaneousConversation({
   providerRef.current = provider;
   ttsProviderRef.current = ttsProvider;
   overlapListeningRef.current = overlapListening;
+  useHeadphonesRef.current = useHeadphones;
   speedRef.current = speed;
   echoCancellationAIRef.current = echoCancellationAI;
 
@@ -194,8 +197,12 @@ export default function useSimultaneousConversation({
 
   const duckTtsVolume = useCallback(() => {
     if (currentAudioRef.current && isProcessingQueueRef.current) {
-      console.log('🔈 [Audio Ducking] Giảm âm lượng robot phát loa xuống 50% vì phát hiện người dùng đang nói');
-      currentAudioRef.current.volume = 0.50;
+      let targetVolume = 1.0;
+      if (overlapListeningRef.current) {
+        targetVolume = useHeadphonesRef.current ? 0.80 : 0.50;
+      }
+      console.log(`🔈 [Audio Ducking] Giảm âm lượng robot phát loa xuống ${targetVolume * 100}% vì phát hiện người dùng đang nói`);
+      currentAudioRef.current.volume = targetVolume;
     }
   }, []);
 
