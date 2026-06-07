@@ -1,3 +1,8 @@
+import { requireAuth } from '@/lib/auth';
+import { enforceRateLimit, rateLimitHeaders } from '@/lib/rateLimit';
+
+export const maxDuration = 60;
+
 // Default voice mapping per language
 const DEFAULT_VOICES = {
   vi: 'vi-VN-HoaiMyNeural',
@@ -43,6 +48,16 @@ const ELEVENLABS_MULTILINGUAL_V2_LANGS = new Set([
 
 function normalizeLangCode(lang) {
   return (lang || 'en').toString().split('-')[0].toLowerCase();
+}
+
+function getDefaultAzureVoice(lang) {
+  const normalizedLang = normalizeLangCode(lang);
+  return DEFAULT_VOICES[normalizedLang] || DEFAULT_VOICES.en;
+}
+
+function isAzureVoiceCompatibleWithLang(voiceName, lang) {
+  if (!voiceName) return false;
+  return normalizeLangCode(voiceName) === normalizeLangCode(lang);
 }
 
 function selectElevenLabsModel(lang) {
@@ -216,70 +231,122 @@ function buildConversationalSSML(text, voiceName, lang) {
 
 export async function GET(request) {
   try {
+    const auth = await requireAuth(request);
+    if (auth.response) return auth.response;
+
+    const limit = enforceRateLimit(request, {
+      name: 'tts',
+      user: auth.user,
+      limit: 180,
+      windowMs: 60_000,
+    });
+    if (limit.response) return limit.response;
+
     const { searchParams } = new URL(request.url);
     const text = searchParams.get('text');
     const lang = searchParams.get('lang');
     const voice = searchParams.get('voice');
     const voiceId = searchParams.get('voiceId');
     const provider = searchParams.get('provider') || 'azure';
+    const requestId = request.headers.get('x-request-id') ||
+      searchParams.get('requestId') ||
+      `tts-${Date.now().toString(36)}`;
 
     if (!text || text.trim().length === 0) {
-      return Response.json({ error: 'No text provided' }, { status: 400 });
+      return Response.json({ ok: false, error: 'No text provided' }, { status: 400 });
     }
 
-    if (provider === 'elevenlabs') {
-      return await handleElevenLabsTTS(text, lang, voice || voiceId);
+    if (text.length > 3000) {
+      return Response.json({ ok: false, error: 'Text is too long' }, { status: 400 });
     }
 
-    return await handleAzureTTS(text, lang, voice, voiceId);
+    const response = provider === 'elevenlabs'
+      ? await handleElevenLabsTTS(text, lang, voice || voiceId, requestId)
+      : await handleAzureTTS(text, lang, voice, voiceId, requestId);
+
+    response.headers.set('X-Request-ID', requestId);
+    Object.entries(rateLimitHeaders(limit.result)).forEach(([key, value]) => {
+      response.headers.set(key, value);
+    });
+    return response;
   } catch (err) {
     console.error('🔊 [TTS GET] Error:', err);
-    return Response.json({ error: err.message || 'TTS failed' }, { status: 500 });
+    return Response.json({ ok: false, error: err.message || 'TTS failed' }, { status: 500 });
   }
 }
 
 export async function POST(request) {
   try {
-    const { text, lang, voice, voiceId, provider = 'azure' } = await request.json();
+    const auth = await requireAuth(request);
+    if (auth.response) return auth.response;
+
+    const limit = enforceRateLimit(request, {
+      name: 'tts',
+      user: auth.user,
+      limit: 180,
+      windowMs: 60_000,
+    });
+    if (limit.response) return limit.response;
+
+    const { text, lang, voice, voiceId, provider = 'azure', requestId: bodyRequestId } = await request.json();
+    const requestId = request.headers.get('x-request-id') ||
+      bodyRequestId ||
+      `tts-${Date.now().toString(36)}`;
 
     if (!text || text.trim().length === 0) {
-      return Response.json({ error: 'No text provided' }, { status: 400 });
+      return Response.json({ ok: false, error: 'No text provided' }, { status: 400 });
     }
 
-    // ========== ELEVENLABS TTS ==========
-    if (provider === 'elevenlabs') {
-      return await handleElevenLabsTTS(text, lang, voice || voiceId);
+    if (text.length > 3000) {
+      return Response.json({ ok: false, error: 'Text is too long' }, { status: 400 });
     }
 
-    // ========== AZURE TTS (default) ==========
-    return await handleAzureTTS(text, lang, voice, voiceId);
+    const response = provider === 'elevenlabs'
+      ? await handleElevenLabsTTS(text, lang, voice || voiceId, requestId)
+      : await handleAzureTTS(text, lang, voice, voiceId, requestId);
 
+    response.headers.set('X-Request-ID', requestId);
+    Object.entries(rateLimitHeaders(limit.result)).forEach(([key, value]) => {
+      response.headers.set(key, value);
+    });
+    return response;
   } catch (err) {
     console.error('🔊 [TTS] Error:', err);
-    return Response.json({ error: err.message || 'TTS failed' }, { status: 500 });
+    return Response.json({ ok: false, error: err.message || 'TTS failed' }, { status: 500 });
   }
 }
 
 // ==================== AZURE TTS ====================
-async function handleAzureTTS(text, lang, voice, voiceId) {
+async function handleAzureTTS(text, lang, voice, voiceId, requestId) {
+  const startedAt = Date.now();
   const azureKey = (process.env.AZURE_SPEECH_KEY || '').replace(/['"]/g, '').trim();
   const azureRegion = (process.env.AZURE_SPEECH_REGION || '').replace(/['"]/g, '').trim();
 
   if (!azureKey || !azureRegion) {
     console.error('🔊 [Azure TTS] Missing AZURE_SPEECH_KEY or AZURE_SPEECH_REGION');
-    return Response.json({ error: 'Azure Speech credentials not configured' }, { status: 500 });
+    return Response.json({ ok: false, error: 'Azure Speech credentials not configured' }, { status: 500 });
   }
 
-  const selectedVoice = voiceId || voice || DEFAULT_VOICES[lang] || 'en-US-JennyNeural';
-  const baseLang = lang || selectedVoice.split('-')[0] || 'en';
+  const baseLang = normalizeLangCode(lang);
+  const requestedVoice = (voiceId || voice || '').toString().trim();
+  let selectedVoice = requestedVoice || getDefaultAzureVoice(baseLang);
 
-  console.log(`🔊 [Azure TTS] voice=${selectedVoice}, lang=${baseLang}, text="${text.slice(0, 60)}..."`);
+  if (!isAzureVoiceCompatibleWithLang(selectedVoice, baseLang)) {
+    const fallbackVoice = getDefaultAzureVoice(baseLang);
+    console.warn(
+      `[Azure TTS] Voice "${selectedVoice}" is not compatible with lang "${lang}" -> fallback "${fallbackVoice}"`
+    );
+    selectedVoice = fallbackVoice;
+  }
+
+  console.log(`[Azure TTS][${requestId}] voice=${selectedVoice}, lang=${baseLang}, text="${text.slice(0, 60)}..."`);
 
   const { ssml, normalized } = buildConversationalSSML(text, selectedVoice, baseLang);
   console.log(`🔊 [Azure TTS] SSML normalized="${normalized.slice(0, 60)}..."`);
 
   const endpoint = `https://${azureRegion}.tts.speech.microsoft.com/cognitiveservices/v1`;
 
+  const azureStartedAt = Date.now();
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -295,28 +362,39 @@ async function handleAzureTTS(text, lang, voice, voiceId) {
   if (!response.ok) {
     const errText = await response.text().catch(() => '');
     console.error(`🔊 [Azure TTS] API error ${response.status}: ${errText}`);
-    return Response.json({ error: `Azure TTS error: ${response.status}` }, { status: response.status });
+    return Response.json({ ok: false, error: `Azure TTS error: ${response.status}` }, { status: response.status });
   }
 
   const audioBuffer = await response.arrayBuffer();
-  console.log(`🔊 [Azure TTS] Done: ${audioBuffer.byteLength} bytes`);
+  const azureMs = Date.now() - azureStartedAt;
+  const totalMs = Date.now() - startedAt;
+  console.log(`[Azure TTS][${requestId}] Done: ${audioBuffer.byteLength} bytes timings=${JSON.stringify({ azureMs, totalMs })}`);
 
   if (audioBuffer.byteLength === 0) {
-    return Response.json({ error: 'No audio data received' }, { status: 500 });
+    return Response.json({ ok: false, error: 'No audio data received' }, { status: 500 });
   }
 
   return new Response(audioBuffer, {
     status: 200,
-    headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': audioBuffer.byteLength.toString() },
+    headers: {
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': audioBuffer.byteLength.toString(),
+      'Cache-Control': 'no-store',
+      'Server-Timing': `azure;dur=${azureMs}, total;dur=${totalMs}`,
+      'X-TTS-Provider': 'azure',
+      'X-TTS-Voice': selectedVoice,
+      'X-Request-ID': requestId,
+    },
   });
 }
 
 // ==================== ELEVENLABS TTS ====================
-async function handleElevenLabsTTS(text, lang, voiceId) {
+async function handleElevenLabsTTS(text, lang, voiceId, requestId) {
+  const startedAt = Date.now();
   const apiKey = (process.env.ELEVENLABS_API_KEY || '').replace(/['"]/g, '').trim();
   if (!apiKey) {
     console.error('[ElevenLabs TTS] Missing ELEVENLABS_API_KEY');
-    return Response.json({ error: 'ElevenLabs API key not configured' }, { status: 500 });
+    return Response.json({ ok: false, error: 'ElevenLabs API key not configured' }, { status: 500 });
   }
 
   const normalizedLang = normalizeLangCode(lang);
@@ -334,7 +412,7 @@ async function handleElevenLabsTTS(text, lang, voiceId) {
     console.warn(`[ElevenLabs TTS] Invalid voice id "${requestedVoice}" -> fallback "${selectedVoice}"`);
   }
 
-  console.log(`[ElevenLabs TTS] voice=${selectedVoice}, model=${selectedModel}, lang=${normalizedLang}, text="${text.slice(0, 60)}..."`);
+  console.log(`[ElevenLabs TTS][${requestId}] voice=${selectedVoice}, model=${selectedModel}, lang=${normalizedLang}, text="${text.slice(0, 60)}..."`);
 
   const callTTS = async (voice) => {
     const endpoint = `https://api.elevenlabs.io/v1/text-to-speech/${voice}?output_format=mp3_44100_128`;
@@ -361,6 +439,7 @@ async function handleElevenLabsTTS(text, lang, voiceId) {
     return response;
   };
 
+  const elevenStartedAt = Date.now();
   let response = await callTTS(selectedVoice);
 
   if (!response.ok) {
@@ -380,7 +459,7 @@ async function handleElevenLabsTTS(text, lang, voiceId) {
     } else {
       console.error(`[ElevenLabs TTS] API error ${response.status}: ${errText}`);
       return Response.json(
-        { error: `ElevenLabs TTS error ${response.status}${errText ? `: ${errText}` : ''}` },
+        { ok: false, error: `ElevenLabs TTS error ${response.status}${errText ? `: ${errText}` : ''}` },
         { status: response.status }
       );
     }
@@ -390,21 +469,31 @@ async function handleElevenLabsTTS(text, lang, voiceId) {
     const retryErrText = await response.text().catch(() => '');
     console.error(`[ElevenLabs TTS] Retry failed ${response.status}: ${retryErrText}`);
     return Response.json(
-      { error: `ElevenLabs TTS error ${response.status}${retryErrText ? `: ${retryErrText}` : ''}` },
+      { ok: false, error: `ElevenLabs TTS error ${response.status}${retryErrText ? `: ${retryErrText}` : ''}` },
       { status: response.status }
     );
   }
 
   const audioBuffer = await response.arrayBuffer();
-  console.log(`[ElevenLabs TTS] Done: ${audioBuffer.byteLength} bytes`);
+  const elevenMs = Date.now() - elevenStartedAt;
+  const totalMs = Date.now() - startedAt;
+  console.log(`[ElevenLabs TTS][${requestId}] Done: ${audioBuffer.byteLength} bytes timings=${JSON.stringify({ elevenMs, totalMs })}`);
 
   if (audioBuffer.byteLength === 0) {
-    return Response.json({ error: 'No audio data received' }, { status: 500 });
+    return Response.json({ ok: false, error: 'No audio data received' }, { status: 500 });
   }
 
   return new Response(audioBuffer, {
     status: 200,
-    headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': audioBuffer.byteLength.toString() },
+    headers: {
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': audioBuffer.byteLength.toString(),
+      'Cache-Control': 'no-store',
+      'Server-Timing': `elevenlabs;dur=${elevenMs}, total;dur=${totalMs}`,
+      'X-TTS-Provider': 'elevenlabs',
+      'X-TTS-Voice': selectedVoice,
+      'X-Request-ID': requestId,
+    },
   });
 }
 

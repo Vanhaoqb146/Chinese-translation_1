@@ -1,77 +1,116 @@
-import { NextResponse } from 'next/server';
-import { getUsers, toggleUserStatus, createUser, adminResetPassword } from '@/lib/auth';
+import { getUsers, toggleUserStatus, createUser, adminResetPassword, requireAdmin } from '@/lib/auth';
+import { jsonError, jsonOk } from '@/lib/apiResponse';
+import { enforceRateLimit, rateLimitHeaders } from '@/lib/rateLimit';
 
-// GET — Lấy danh sách người dùng
-export async function GET() {
+async function authorizeAdmin(request, name, limit = 60) {
+  const auth = await requireAdmin(request);
+  if (auth.response) return auth;
+
+  const rate = enforceRateLimit(request, {
+    name,
+    user: auth.user,
+    limit,
+    windowMs: 60_000,
+  });
+  if (rate.response) return { response: rate.response };
+
+  return { user: auth.user, rate: rate.result };
+}
+
+export async function GET(request) {
   try {
+    const auth = await authorizeAdmin(request, 'admin-users-get');
+    if (auth.response) return auth.response;
+
     const users = await getUsers();
-    const safeUsers = users.map(({ password, ...u }) => u);
-    return NextResponse.json({ users: safeUsers }, { status: 200 });
+    const safeUsers = users.map(({ password: _password, ...user }) => user);
+    return jsonOk(
+      { users: safeUsers },
+      { headers: rateLimitHeaders(auth.rate) }
+    );
   } catch (error) {
-    return NextResponse.json({ error: 'Lỗi khi tải danh sách người dùng' }, { status: 500 });
+    console.error('Admin users GET error:', error);
+    return jsonError('Loi khi tai danh sach nguoi dung', { status: 500 });
   }
 }
 
-// POST — Tạo tài khoản mới
 export async function POST(request) {
   try {
-    const body = await request.json();
-    const { username, password, name, unit, role } = body;
+    const auth = await authorizeAdmin(request, 'admin-users-post', 30);
+    if (auth.response) return auth.response;
+
+    const { username, password, name, unit, role } = await request.json();
 
     if (!username || !password || !name) {
-      return NextResponse.json({ error: 'Thiếu thông tin bắt buộc (username, password, name)' }, { status: 400 });
+      return jsonError('Thieu thong tin bat buoc (username, password, name)', { status: 400 });
     }
 
     const result = await createUser({ username, password, name, unit, role });
 
     if (result.error) {
-      return NextResponse.json({ error: result.error }, { status: 409 });
+      return jsonError(result.error, { status: 409 });
     }
 
-    return NextResponse.json({ message: 'Tạo tài khoản thành công', id: result.id }, { status: 201 });
+    return jsonOk(
+      { message: 'Tao tai khoan thanh cong', id: result.id },
+      { status: 201, headers: rateLimitHeaders(auth.rate) }
+    );
   } catch (error) {
-    return NextResponse.json({ error: 'Lỗi server' }, { status: 500 });
+    console.error('Admin users POST error:', error);
+    return jsonError('Loi server', { status: 500 });
   }
 }
 
-// PATCH — Bật/tắt trạng thái tài khoản
 export async function PATCH(request) {
   try {
+    const auth = await authorizeAdmin(request, 'admin-users-patch', 60);
+    if (auth.response) return auth.response;
+
     const { userId, isActive } = await request.json();
 
     if (!userId || typeof isActive !== 'boolean') {
-      return NextResponse.json({ error: 'Dữ liệu không hợp lệ' }, { status: 400 });
+      return jsonError('Du lieu khong hop le', { status: 400 });
     }
 
     const success = await toggleUserStatus(userId, isActive);
 
-    if (success) {
-      return NextResponse.json({ message: 'Cập nhật trạng thái thành công' }, { status: 200 });
-    } else {
-      return NextResponse.json({ error: 'Không thể cập nhật (Tài khoản Admin gốc không được phép khóa)' }, { status: 403 });
+    if (!success) {
+      return jsonError('Khong the cap nhat tai khoan nay', { status: 403 });
     }
+
+    return jsonOk(
+      { message: 'Cap nhat trang thai thanh cong' },
+      { headers: rateLimitHeaders(auth.rate) }
+    );
   } catch (error) {
-    return NextResponse.json({ error: 'Lỗi server' }, { status: 500 });
+    console.error('Admin users PATCH error:', error);
+    return jsonError('Loi server', { status: 500 });
   }
 }
 
-// PUT — Admin đặt lại mật khẩu cho user
 export async function PUT(request) {
   try {
+    const auth = await authorizeAdmin(request, 'admin-users-put', 30);
+    if (auth.response) return auth.response;
+
     const { userId, newPassword } = await request.json();
 
     if (!userId || !newPassword) {
-      return NextResponse.json({ error: 'Thiếu thông tin (userId, newPassword)' }, { status: 400 });
+      return jsonError('Thieu thong tin (userId, newPassword)', { status: 400 });
     }
 
     const result = await adminResetPassword(userId, newPassword);
 
     if (result.error) {
-      return NextResponse.json({ error: result.error }, { status: 403 });
+      return jsonError(result.error, { status: 403 });
     }
 
-    return NextResponse.json({ message: 'Đặt lại mật khẩu thành công' }, { status: 200 });
+    return jsonOk(
+      { message: 'Dat lai mat khau thanh cong' },
+      { headers: rateLimitHeaders(auth.rate) }
+    );
   } catch (error) {
-    return NextResponse.json({ error: 'Lỗi server' }, { status: 500 });
+    console.error('Admin users PUT error:', error);
+    return jsonError('Loi server', { status: 500 });
   }
 }

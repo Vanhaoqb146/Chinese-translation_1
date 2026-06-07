@@ -2,7 +2,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 
 /**
- * useRealtimeConversation — Multi-provider STT + GPT-4o + TTS
+ * useRealtimeConversation — Multi-provider STT + GPT-5.x + TTS
  *
  * Supports:
  *   - Azure Speech SDK (STT)

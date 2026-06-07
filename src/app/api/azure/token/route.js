@@ -1,16 +1,27 @@
-export async function GET() {
+import { requireAuth } from '@/lib/auth';
+import { jsonError, jsonOk, noStoreHeaders } from '@/lib/apiResponse';
+import { enforceRateLimit, rateLimitHeaders } from '@/lib/rateLimit';
+
+export async function GET(request) {
+  const auth = await requireAuth(request);
+  if (auth.response) return auth.response;
+
+  const limit = enforceRateLimit(request, {
+    name: 'azure-token',
+    user: auth.user,
+    limit: 60,
+    windowMs: 60_000,
+  });
+  if (limit.response) return limit.response;
+
   const key = process.env.AZURE_SPEECH_KEY;
   const region = process.env.AZURE_SPEECH_REGION;
 
   if (!key || !region) {
-    return Response.json(
-      { error: 'AZURE_SPEECH_KEY or AZURE_SPEECH_REGION not configured' },
-      { status: 500 }
-    );
+    return jsonError('AZURE_SPEECH_KEY or AZURE_SPEECH_REGION not configured', { status: 500 });
   }
 
   try {
-    // Exchange subscription key for a short-lived token (10 min)
     const tokenRes = await fetch(
       `https://${region}.api.cognitive.microsoft.com/sts/v1.0/issueToken`,
       {
@@ -19,6 +30,7 @@ export async function GET() {
           'Ocp-Apim-Subscription-Key': key,
           'Content-Length': '0',
         },
+        signal: AbortSignal.timeout(10_000),
       }
     );
 
@@ -27,9 +39,17 @@ export async function GET() {
     }
 
     const token = await tokenRes.text();
-    return Response.json({ token, region });
+    return jsonOk(
+      { token, region },
+      {
+        headers: {
+          ...noStoreHeaders(),
+          ...rateLimitHeaders(limit.result),
+        },
+      }
+    );
   } catch (err) {
     console.error('Azure token error:', err);
-    return Response.json({ error: err.message }, { status: 500 });
+    return jsonError(err.message, { status: 500 });
   }
 }

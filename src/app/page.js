@@ -107,21 +107,40 @@ export default function HomePage() {
   const [playingId, setPlayingId] = useState(null); // ID của câu đang phát TTS
 
   useEffect(() => {
-    setMounted(true);
-    const savedUser = localStorage.getItem('vt_user');
-    if (savedUser) setSessionUser(JSON.parse(savedUser));
-    
-    // Load saved settings
-    try {
-      const savedApiKey = localStorage.getItem('vt_setting_apiKey');
-      if (savedApiKey) setApiKey(savedApiKey);
-      const savedModel = localStorage.getItem('vt_setting_selectedModel');
-      if (savedModel) setSelectedModel(normalizeTranslationModel(savedModel));
-    } catch (e) {
-      console.warn('Failed to load settings from localStorage:', e);
+    async function loadSession() {
+      setMounted(true);
+
+      const savedUser = localStorage.getItem('vt_user');
+      if (savedUser) {
+        try {
+          const res = await fetch('/api/auth/me');
+          if (res.ok) {
+            const data = await res.json();
+            setSessionUser(data.user);
+            localStorage.setItem('vt_user', JSON.stringify(data.user));
+          } else {
+            localStorage.removeItem('vt_user');
+          }
+        } catch (e) {
+          console.warn('Failed to verify saved session:', e);
+          localStorage.removeItem('vt_user');
+        }
+      }
+
+      // Load saved settings
+      try {
+        const savedApiKey = localStorage.getItem('vt_setting_apiKey');
+        if (savedApiKey) setApiKey(savedApiKey);
+        const savedModel = localStorage.getItem('vt_setting_selectedModel');
+        if (savedModel) setSelectedModel(normalizeTranslationModel(savedModel));
+      } catch (e) {
+        console.warn('Failed to load settings from localStorage:', e);
+      }
+
+      setAuthChecked(true);
     }
-    
-    setAuthChecked(true);
+
+    loadSession();
   }, []);
 
   // Sync convHistory → sessionStorage
@@ -134,7 +153,10 @@ export default function HomePage() {
     localStorage.setItem('vt_user', JSON.stringify(user));
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch { /* ignore */ }
     setSessionUser(null);
     localStorage.removeItem('vt_user');
     sessionStorage.removeItem('vt_conv_history');
@@ -256,7 +278,7 @@ export default function HomePage() {
           await speak(translated, LANGUAGES[srcIdx].ttsCode);
         });
     }
-  }, [srcIdx, tgtIdx, apiKey, selectedModel, queueTranslation]);
+  }, [srcIdx, tgtIdx, apiKey, selectedModel, queueTranslation, speak]);
 
   const handleFinalResultSource = useCallback((t) => handleFinalResult(t, 'source'), [handleFinalResult]);
 
@@ -402,7 +424,7 @@ export default function HomePage() {
             <button className={viewMode === 'standard' ? 'active' : ''} onClick={() => setViewMode('standard')}>📋 Dịch thuật</button>
             <button className={viewMode === 'conversation' ? 'active' : ''} onClick={() => setViewMode('conversation')}>💬 Giao tiếp</button>
             <button className={viewMode === 'quick' ? 'active' : ''} onClick={() => setViewMode('quick')}>⚡ Giao tiếp nhanh</button>
-            <button className={viewMode === 'simultaneous' ? 'active' : ''} onClick={() => setViewMode('simultaneous')}>🎙️ Dịch song song</button>
+            <button className={viewMode === 'simultaneous' ? 'active' : ''} onClick={() => setViewMode('simultaneous')}>🎙️ Giao tiếp song song</button>
           </div>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             {sessionUser && (

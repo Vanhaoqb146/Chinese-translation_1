@@ -136,6 +136,7 @@ export default function useSimultaneousConversation({
 
   const conversationHistoryRef = useRef([]);
   const msgIdRef = useRef(Date.now());
+  const ttsSessionRef = useRef(0); // Session counter để delay clearing activeTtsLangRef an toàn
 
   // Stable refs
   const srcLangCodeRef = useRef(srcLangCode);
@@ -198,11 +199,12 @@ export default function useSimultaneousConversation({
     currentAudioUrlRef.current = null;
   }, []);
 
+
   const duckTtsVolume = useCallback(() => {
     if (currentAudioRef.current && isProcessingQueueRef.current) {
       let targetVolume = 1.0;
       if (overlapListeningRef.current) {
-        targetVolume = useHeadphonesRef.current ? 0.80 : 0.50;
+        targetVolume = useHeadphonesRef.current ? 0.80 : 0.40;
       }
       console.log(`🔈 [Audio Ducking] Giảm âm lượng robot phát loa xuống ${targetVolume * 100}% vì phát hiện người dùng đang nói`);
       currentAudioRef.current.volume = targetVolume;
@@ -265,12 +267,18 @@ export default function useSimultaneousConversation({
           }
         });
         azureStreamRef.current = stream;
+        if (overlapListeningRef.current) {
+          bgStreamRef.current = stream;
+        }
       } catch (err) {
         console.warn('⚠️ [setupRecognizer] Không thể lấy Custom MediaStream, dùng mic mặc định:', err);
         stream = null;
       }
     } else {
       console.log('🎙️ [getUserMedia] Sử dụng lại Stream Micro đang hoạt động');
+      if (overlapListeningRef.current) {
+        bgStreamRef.current = stream;
+      }
     }
 
     let audioConfig;
@@ -299,13 +307,9 @@ export default function useSimultaneousConversation({
 
     recognizer.recognizing = (s, e) => {
       if (isSpeakingRef.current) return;
+      if (recognizerRef.current !== recognizer) return; // Bỏ qua event từ recognizer cũ đã bị thay thế
       const transcript = e.result.text;
       if (!transcript) return;
-
-      if (isProcessingQueueRef.current) {
-        userSpokeDuringTtsRef.current = true;
-        duckTtsVolume();
-      }
 
       if (autoDetectRef.current) {
         try {
@@ -315,7 +319,8 @@ export default function useSimultaneousConversation({
           if (detectedLocale && detectedLocale !== 'Unknown') {
             const baseLang = detectedLocale.split('-')[0];
             if (activeTtsLangRef.current === baseLang) {
-              console.log(`🛡️ [Azure AEC Lang Filter] Bỏ qua đổi ngôn ngữ tự động sang "${baseLang}" vì Robot đang phát loa.`);
+              console.log(`🛡️ [Azure AEC Echo] Bỏ qua TOÀN BỘ event vì phát hiện tiếng loa dội ngược (${baseLang})`);
+              return; // Bỏ qua hoàn toàn - chống loa ngoài thu tiếng robot
             } else if (baseLang !== inputLangRef.current) {
               console.log(`🌐 [Auto-detect interim] ${inputLangRef.current} → ${baseLang}`);
               inputLangRef.current = baseLang;
@@ -323,6 +328,21 @@ export default function useSimultaneousConversation({
             }
           }
         } catch (e) { console.warn('⚠️ [Auto-detect interim]', e); }
+
+        // Fallback: Nếu Azure không nhận diện được ngôn ngữ (Unknown/null), dùng text-based detection
+        // Để chặn echo loa ngoài (VD: loa phát tiếng Trung, mic thu lại thành CJK rác)
+        if (activeTtsLangRef.current) {
+          const echoTextLang = detectLangFromText(transcript, srcLangCodeRef.current, tgtLangCodeRef.current);
+          if (echoTextLang === activeTtsLangRef.current) {
+            console.log(`🛡️ [Text AEC Echo] Bỏ qua interim vì nội dung "${transcript.slice(0, 20)}..." là ${echoTextLang}, trùng ngôn ngữ robot đang phát`);
+            return;
+          }
+        }
+      }
+
+      if (isProcessingQueueRef.current) {
+        userSpokeDuringTtsRef.current = true;
+        duckTtsVolume();
       }
 
       currentInterimRef.current = transcript;
@@ -333,15 +353,11 @@ export default function useSimultaneousConversation({
 
     recognizer.recognized = (s, e) => {
       if (isSpeakingRef.current) return;
+      if (recognizerRef.current !== recognizer) return; // Bỏ qua event từ recognizer cũ đã bị thay thế
       if (e.result.reason === sdk.ResultReason.NoMatch) return;
 
       const transcript = e.result.text;
       if (!transcript) return;
-
-      if (isProcessingQueueRef.current) {
-        userSpokeDuringTtsRef.current = true;
-        duckTtsVolume();
-      }
 
       if (autoDetectRef.current) {
         try {
@@ -351,7 +367,8 @@ export default function useSimultaneousConversation({
           if (detectedLocale && detectedLocale !== 'Unknown') {
             const baseLang = detectedLocale.split('-')[0];
             if (activeTtsLangRef.current === baseLang) {
-              console.log(`🛡️ [Azure AEC Lang Filter] Bỏ qua đổi ngôn ngữ tự động sang "${baseLang}" vì Robot đang phát loa.`);
+              console.log(`🛡️ [Azure AEC Echo] Bỏ qua TOÀN BỘ FINAL event vì phát hiện tiếng loa dội ngược (${baseLang})`);
+              return; // Bỏ qua hoàn toàn - chống loa ngoài thu tiếng robot
             } else if (baseLang !== inputLangRef.current) {
               console.log(`🌐 [Auto-detect FINAL] ${inputLangRef.current} → ${baseLang}`);
               inputLangRef.current = baseLang;
@@ -359,6 +376,20 @@ export default function useSimultaneousConversation({
             }
           }
         } catch (e) { console.warn('⚠️ [Auto-detect final]', e); }
+
+        // Fallback: Nếu Azure không nhận diện được ngôn ngữ (Unknown/null), dùng text-based detection
+        if (activeTtsLangRef.current) {
+          const echoTextLang = detectLangFromText(transcript, srcLangCodeRef.current, tgtLangCodeRef.current);
+          if (echoTextLang === activeTtsLangRef.current) {
+            console.log(`🛡️ [Text AEC Echo] Bỏ qua FINAL vì nội dung "${transcript.slice(0, 20)}..." là ${echoTextLang}, trùng ngôn ngữ robot đang phát`);
+            return;
+          }
+        }
+      }
+
+      if (isProcessingQueueRef.current) {
+        userSpokeDuringTtsRef.current = true;
+        duckTtsVolume();
       }
 
       console.log(`📝 FINAL segment: "${transcript}"`);
@@ -413,6 +444,9 @@ export default function useSimultaneousConversation({
       }
     });
     elStreamRef.current = stream;
+    if (overlapListeningRef.current) {
+      bgStreamRef.current = stream;
+    }
 
     const wsUrl = `wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime&language_code=${inputLang}&audio_format=pcm_16000&commit_strategy=vad&token=${tokenData.token}`;
     const ws = new WebSocket(wsUrl);
@@ -459,6 +493,7 @@ export default function useSimultaneousConversation({
 
     ws.onmessage = (event) => {
       if (isSpeakingRef.current) return;
+      if (elWsRef.current !== ws) return; // Bỏ qua event từ WebSocket cũ đã bị thay thế
       if (stoppingRef.current) return;
       try {
         const data = JSON.parse(event.data);
@@ -541,6 +576,7 @@ export default function useSimultaneousConversation({
 
     rec.onresult = (e) => {
       if (isSpeakingRef.current) return;
+      if (webSpeechRecRef.current !== rec) return; // Bỏ qua event từ recognition session cũ đã bị thay thế
       isWebSpeechFinalFiredRef.current = false;
 
       // Đánh dấu người dùng đã nói trong lúc dịch/phát âm
@@ -730,8 +766,6 @@ export default function useSimultaneousConversation({
       return;
     }
 
-    lastQueuedTextRef.current = text;
-
     const noiseWords = ['phẩy.', 'chấm.', 'phẩy', 'chấm', 'hỏi.', 'hỏi', 'comma', 'period', 'dot'];
     const cleanLower = text.replace(/[.,!?;:]+$/g, '').trim().toLowerCase();
     if (noiseWords.includes(cleanLower) || /^[.,!?;:\s]+$/.test(text)) {
@@ -742,9 +776,10 @@ export default function useSimultaneousConversation({
       return;
     }
 
-    // Tiếng Anh rác ngắn do micro thu sai
-    const isPureEnglish = /^[a-zA-Z0-9\s.,!?'"\-:;()]+$/.test(text.trim());
-    const wordCount = text.trim().split(/\s+/).length;
+    // Tiếng Anh rác ngắn do micro thu sai (bỏ qua dấu câu Trung Quốc khi check Latin để tránh lọt lưới)
+    const cleanLatinCheck = text.replace(/[。，！？、：；]/g, '').trim();
+    const isPureEnglish = /^[a-zA-Z0-9\s.,!?'"\-:;()]+$/.test(cleanLatinCheck);
+    const wordCount = cleanLatinCheck.split(/\s+/).length;
     if (isPureEnglish && wordCount <= 4 && inputLangRef.current !== 'en') {
       console.log(`🚫 Bỏ qua nhiễu Latin ngắn: "${text}"`);
       accumulatedTextRef.current = '';
@@ -756,7 +791,7 @@ export default function useSimultaneousConversation({
     // Nhận dạng ngôn ngữ từ nội dung
     if (autoDetectRef.current) {
       const textLang = detectLangFromText(text, srcLangCodeRef.current, tgtLangCodeRef.current);
-      if (textLang && textLang !== inputLangRef.current) {
+      if (textLang && (textLang === srcLangCodeRef.current || textLang === tgtLangCodeRef.current) && textLang !== inputLangRef.current) {
         if (activeTtsLangRef.current === textLang) {
           console.log(`🛡️ [Text AEC Lang Filter] Bỏ qua đổi ngôn ngữ tự động sang "${textLang}" vì Robot đang phát loa.`);
         } else {
@@ -790,14 +825,9 @@ export default function useSimultaneousConversation({
       } catch (e) { /* ignore */ }
     }
 
-    // For Azure autoDetect: restart recognizer to reset Azure's auto-detect language session memory.
-    // This avoids getting "stuck" in a single language acoustic model.
-    if (providerRef.current === 'azure' && autoDetectRef.current && recognizerRef.current) {
-      console.log('🔄 [Auto-detect Azure] Khởi động lại recognizer để reset bộ nhớ ngôn ngữ...');
-      setupRecognizer(inputLangRef.current).catch(err => {
-        console.warn('⚠️ Lỗi khởi động lại Azure recognizer:', err);
-      });
-    }
+
+
+    lastQueuedTextRef.current = text;
 
     const taskId = ++msgIdRef.current;
     console.log(`📦 [Queue] Đẩy tác vụ #${taskId} vào hàng đợi: "${taskText.slice(0, 50)}..."`);
@@ -922,7 +952,9 @@ export default function useSimultaneousConversation({
         } else {
           // Kích hoạt mút mic chống rú âm nếu KHÔNG dùng tai nghe đè
           isSpeakingRef.current = !overlapListeningRef.current;
+
           // Lưu lại ngôn ngữ đang phát để chống dội âm nhận diện tự động
+          ++ttsSessionRef.current; // Tăng session counter để delay clearing an toàn
           activeTtsLangRef.current = task.toLang;
           if (onStatusChangeRef.current) onStatusChangeRef.current('speaking');
 
@@ -993,6 +1025,13 @@ export default function useSimultaneousConversation({
                     console.warn('⚠️ Gán playbackRate lỗi:', e);
                   }
 
+                  // Đặt âm lượng khởi đầu cho chế độ Nghe đè + Loa ngoài (không tai nghe)
+                  // Giảm xuống 40% ngay từ đầu để hạn chế echo loa
+                  if (overlapListeningRef.current && !useHeadphonesRef.current) {
+                    audio.volume = 0.40;
+                    console.log('🔉 [Âm lượng loa ngoài] Đặt 40% từ đầu để giảm echo');
+                  }
+
                   audio.play().catch(() => { done(); });
                 });
               } else {
@@ -1006,8 +1045,17 @@ export default function useSimultaneousConversation({
       console.error(`❌ [Queue Engine Error] #${task.id}:`, err);
       if (onErrorRef.current) onErrorRef.current(err.message);
     } finally {
-      // Giải phóng ngôn ngữ TTS đang phát để khôi phục nhận diện tự động
-      activeTtsLangRef.current = null;
+      // Delay clearing activeTtsLangRef sau khi TTS kết thúc để bắt dư âm echo còn vậng trong phòng
+      // Tăng lên 3.0s nếu sử dụng loa ngoài (không tai nghe) vì độ vang và dội âm lớn hơn
+      const guardDelay = (overlapListeningRef.current && !useHeadphonesRef.current) ? 3000 : 1500;
+      const sessionAtFinish = ttsSessionRef.current;
+      setTimeout(() => {
+        // Chỉ clear nếu không có TTS mới nào bắt đầu (tránh conflict với task tiếp theo)
+        if (ttsSessionRef.current === sessionAtFinish) {
+          activeTtsLangRef.current = null;
+          console.log(`🛡️ [Post-TTS Guard] Xóa guard chống echo sau ${(guardDelay / 1000).toFixed(1)}s`);
+        }
+      }, guardDelay);
 
       // Khôi phục lại âm lượng phát loa cho lượt dịch tiếp theo
       restoreTtsVolume();
@@ -1048,7 +1096,7 @@ export default function useSimultaneousConversation({
       // Gọi xử lý phần tử tiếp theo
       processTranslationQueue();
     }
-  }, [getOrCreateTtsAudio, releaseCurrentAudioUrl, setupWebSpeechRecognizer]);
+  }, [getOrCreateTtsAudio, releaseCurrentAudioUrl, setupWebSpeechRecognizer, setupRecognizer]);
 
   // ====== Start ======
   const start = useCallback(async (inputLang) => {
@@ -1078,25 +1126,9 @@ export default function useSimultaneousConversation({
 
       if (onStatusChangeRef.current) onStatusChangeRef.current('connecting');
 
-      // [AEC Background Stream] Kích hoạt khử vọng phần cứng toàn cục cho trình duyệt
+      // [AEC Background Stream] Sử dụng chung stream microphone của STT để tránh gọi getUserMedia lần 2 gây nhiễu/conflict âm thanh
       if (overlapListeningRef.current) {
-        try {
-          if (bgStreamRef.current) {
-            try { bgStreamRef.current.getTracks().forEach(t => t.stop()); } catch (e) {}
-            bgStreamRef.current = null;
-          }
-          const stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true
-            }
-          });
-          bgStreamRef.current = stream;
-          console.log('🛡️ [AEC Background Stream] Activated native hardware echo cancellation globally');
-        } catch (err) {
-          console.warn('⚠️ [AEC Background Stream] Không thể kích hoạt stream khử vọng nền:', err);
-        }
+        console.log('🛡️ [AEC Background Stream] Activated globally (shared stream with STT)');
       }
 
       if (providerRef.current === 'web-speech') {

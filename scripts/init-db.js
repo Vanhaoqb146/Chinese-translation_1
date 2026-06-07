@@ -5,6 +5,16 @@
 // Load .env.local vì chạy ngoài Next.js
 require('dotenv').config({ path: '.env.local' });
 const { sql } = require('@vercel/postgres');
+const crypto = require('crypto');
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('base64url');
+  const iterations = 310000;
+  const hash = crypto
+    .pbkdf2Sync(password, salt, iterations, 32, 'sha256')
+    .toString('base64url');
+  return `pbkdf2_sha256$${iterations}$${salt}$${hash}`;
+}
 
 async function initDB() {
   try {
@@ -46,11 +56,14 @@ async function initDB() {
     const { rows } = await sql`SELECT COUNT(*) as count FROM users`;
     if (Number(rows[0].count) === 0) {
       console.log('🌱 Seed dữ liệu người dùng mẫu...');
+      const adminPassword = hashPassword('admin123');
+      const user1Password = hashPassword('123456');
+      const user2Password = hashPassword('123456');
       await sql`
         INSERT INTO users (username, password, role, name, unit, avatar, is_active) VALUES
-        ('admin', 'admin123', 'admin', 'Super Admin', 'All Units', 'https://api.dicebear.com/7.x/avataaars/svg?seed=admin', true),
-        ('user1', '123456', 'user', 'Nhân viên A', 'Đơn vị A', 'https://api.dicebear.com/7.x/avataaars/svg?seed=user1', true),
-        ('user2', '123456', 'user', 'Nhân viên B', 'Đơn vị B', 'https://api.dicebear.com/7.x/avataaars/svg?seed=user2', true)
+        ('admin', ${adminPassword}, 'admin', 'Super Admin', 'All Units', 'https://api.dicebear.com/7.x/avataaars/svg?seed=admin', true),
+        ('user1', ${user1Password}, 'user', 'Nhân viên A', 'Đơn vị A', 'https://api.dicebear.com/7.x/avataaars/svg?seed=user1', true),
+        ('user2', ${user2Password}, 'user', 'Nhân viên B', 'Đơn vị B', 'https://api.dicebear.com/7.x/avataaars/svg?seed=user2', true)
       `;
       console.log('✅ Seed 3 tài khoản thành công');
     } else {

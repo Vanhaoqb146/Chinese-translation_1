@@ -1,32 +1,38 @@
-import { changePassword } from '@/lib/auth';
-import { NextResponse } from 'next/server';
+import { changePassword, requireAuth } from '@/lib/auth';
+import { jsonError, jsonOk } from '@/lib/apiResponse';
+import { enforceRateLimit, rateLimitHeaders } from '@/lib/rateLimit';
 
 export async function POST(request) {
   try {
-    const { userId, oldPassword, newPassword } = await request.json();
+    const auth = await requireAuth(request);
+    if (auth.response) return auth.response;
 
-    if (!userId || !oldPassword || !newPassword) {
-      return NextResponse.json(
-        { error: 'Vui lòng cung cấp đầy đủ thông tin.' },
-        { status: 400 }
-      );
+    const limit = enforceRateLimit(request, {
+      name: 'auth-change-password',
+      user: auth.user,
+      limit: 10,
+      windowMs: 15 * 60_000,
+    });
+    if (limit.response) return limit.response;
+
+    const { oldPassword, newPassword } = await request.json();
+
+    if (!oldPassword || !newPassword) {
+      return jsonError('Vui long cung cap day du thong tin.', { status: 400 });
     }
 
-    const result = await changePassword(userId, oldPassword, newPassword);
+    const result = await changePassword(auth.user.id, oldPassword, newPassword);
 
     if (result.error) {
-      return NextResponse.json({ error: result.error }, { status: 400 });
+      return jsonError(result.error, { status: 400 });
     }
 
-    return NextResponse.json(
-      { message: 'Đổi mật khẩu thành công' },
-      { status: 200 }
+    return jsonOk(
+      { message: 'Doi mat khau thanh cong' },
+      { headers: rateLimitHeaders(limit.result) }
     );
   } catch (error) {
     console.error('Change password error:', error);
-    return NextResponse.json(
-      { error: 'Đã xảy ra lỗi hệ thống.' },
-      { status: 500 }
-    );
+    return jsonError('Da xay ra loi he thong.', { status: 500 });
   }
 }

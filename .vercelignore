@@ -1,0 +1,13 @@
+.gemini/
+.next/
+certificates/
+data/
+docs/
+mobile/
+node_modules/
+
+.env*
+*.log
+Note.txt
+Screenshot*.png
+project_skill.md

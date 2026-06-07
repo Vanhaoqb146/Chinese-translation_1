@@ -1,46 +1,53 @@
-import { authenticate } from '@/lib/auth';
-import { NextResponse } from 'next/server';
+import { authenticate, setAuthCookie, signAccessToken } from '@/lib/auth';
+import { jsonError, jsonOk, noStoreHeaders } from '@/lib/apiResponse';
+import { enforceRateLimit, rateLimitHeaders } from '@/lib/rateLimit';
 
 export async function POST(request) {
   try {
-    const body = await request.json();
-    const { username, password } = body;
+    const limit = enforceRateLimit(request, {
+      name: 'auth-login',
+      limit: 20,
+      windowMs: 15 * 60_000,
+    });
+    if (limit.response) return limit.response;
+
+    const { username, password } = await request.json();
 
     if (!username || !password) {
-      return NextResponse.json(
-        { error: 'Vui lòng cung cấp tài khoản và mật khẩu.' },
-        { status: 400 }
-      );
+      return jsonError('Vui long cung cap tai khoan va mat khau.', { status: 400 });
     }
 
     const user = await authenticate(username, password);
 
-    // Xử lý logic chặn truy cập
-    if (user && user.locked) {
-      return NextResponse.json(
-        { error: 'Tài khoản của bạn đã bị Admin vô hiệu hóa. Vui lòng liên hệ quản trị viên.' },
-        { status: 403 }
-      );
+    if (user?.locked) {
+      return jsonError('Tai khoan cua ban da bi Admin vo hieu hoa. Vui long lien he quan tri vien.', {
+        status: 403,
+        code: 'ACCOUNT_LOCKED',
+      });
     }
 
-    if (user) {
-      // User authenticated successfully
-      return NextResponse.json(
-        { message: 'Đăng nhập thành công', user },
-        { status: 200 }
-      );
-    } else {
-      // Invalid credentials
-      return NextResponse.json(
-        { error: 'Tài khoản hoặc mật khẩu không chính xác.' },
-        { status: 401 }
-      );
+    if (!user) {
+      return jsonError('Tai khoan hoac mat khau khong chinh xac.', {
+        status: 401,
+        code: 'INVALID_CREDENTIALS',
+        headers: rateLimitHeaders(limit.result),
+      });
     }
+
+    const accessToken = signAccessToken(user);
+    const response = jsonOk(
+      { message: 'Dang nhap thanh cong', user, accessToken },
+      {
+        headers: {
+          ...noStoreHeaders(),
+          ...rateLimitHeaders(limit.result),
+        },
+      }
+    );
+    setAuthCookie(response, accessToken);
+    return response;
   } catch (error) {
     console.error('Login Error:', error);
-    return NextResponse.json(
-      { error: 'Đã xảy ra lỗi hệ thống.' },
-      { status: 500 }
-    );
+    return jsonError('Da xay ra loi he thong.', { status: 500 });
   }
 }

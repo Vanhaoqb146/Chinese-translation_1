@@ -14,21 +14,37 @@ export default function HistoryPage() {
   const [expandedDay, setExpandedDay] = useState(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem('vt_user');
-    if (!saved) {
-      router.push('/');
-      return;
-    }
-    const u = JSON.parse(saved);
-    setUser(u);
+    async function loadHistory() {
+      const saved = localStorage.getItem('vt_user');
+      if (!saved) {
+        router.push('/');
+        return;
+      }
 
-    fetch(`/api/history?userId=${encodeURIComponent(u.username)}`)
-      .then(r => r.json())
-      .then(data => {
+      try {
+        const meRes = await fetch('/api/auth/me');
+        if (!meRes.ok) {
+          localStorage.removeItem('vt_user');
+          router.push('/');
+          return;
+        }
+
+        const me = await meRes.json();
+        const u = me.user;
+        setUser(u);
+        localStorage.setItem('vt_user', JSON.stringify(u));
+
+        const historyRes = await fetch(`/api/history?userId=${encodeURIComponent(u.username)}`);
+        const data = await historyRes.json();
         if (data.history) setHistory(data.history);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadHistory();
   }, [router]);
 
   // Nhóm lịch sử theo ngày

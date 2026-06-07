@@ -1,11 +1,22 @@
-/**
- * ElevenLabs API proxy — Cung cấp token 1 lần cho STT WebSocket phía client
- * GET → trả về { token } cho Scribe v2 realtime STT
- */
-export async function GET() {
+import { requireAuth } from '@/lib/auth';
+import { jsonError, jsonOk, noStoreHeaders } from '@/lib/apiResponse';
+import { enforceRateLimit, rateLimitHeaders } from '@/lib/rateLimit';
+
+export async function GET(request) {
+  const auth = await requireAuth(request);
+  if (auth.response) return auth.response;
+
+  const limit = enforceRateLimit(request, {
+    name: 'elevenlabs-token',
+    user: auth.user,
+    limit: 60,
+    windowMs: 60_000,
+  });
+  if (limit.response) return limit.response;
+
   const apiKey = (process.env.ELEVENLABS_API_KEY || '').replace(/['"]/g, '').trim();
   if (!apiKey) {
-    return Response.json({ error: 'ELEVENLABS_API_KEY not configured' }, { status: 500 });
+    return jsonError('ELEVENLABS_API_KEY not configured', { status: 500 });
   }
 
   try {
@@ -13,8 +24,9 @@ export async function GET() {
       method: 'POST',
       headers: {
         'xi-api-key': apiKey,
-        'Content-Type': 'application/json'
-      }
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(10_000),
     });
 
     if (!res.ok) {
@@ -23,12 +35,20 @@ export async function GET() {
     }
 
     const data = await res.json();
-    return Response.json({ 
-      token: data.token,
-      wsUrl: 'wss://api.elevenlabs.io/v1/speech-to-text/realtime',
-    });
+    return jsonOk(
+      {
+        token: data.token,
+        wsUrl: 'wss://api.elevenlabs.io/v1/speech-to-text/realtime',
+      },
+      {
+        headers: {
+          ...noStoreHeaders(),
+          ...rateLimitHeaders(limit.result),
+        },
+      }
+    );
   } catch (err) {
-    console.error('❌ [ElevenLabs Token]', err);
-    return Response.json({ error: err.message }, { status: 500 });
+    console.error('[ElevenLabs Token]', err);
+    return jsonError(err.message, { status: 500 });
   }
 }

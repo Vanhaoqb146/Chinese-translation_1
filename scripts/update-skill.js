@@ -10,13 +10,29 @@ const SKILL_FILE_RELATIVE = '.gemini/skills/voice-translate.md';
 const SKILL_FILE_PATH = path.join(ROOT_DIR, SKILL_FILE_RELATIVE);
 const ROOT_SKILL_FILE_PATH = path.join(ROOT_DIR, 'project_skill.md');
 const PACKAGE_JSON_PATH = path.join(ROOT_DIR, 'package.json');
+const MOBILE_PACKAGE_JSON_PATH = path.join(ROOT_DIR, 'mobile/package.json');
 const INIT_DB_PATH = path.join(ROOT_DIR, 'scripts/init-db.js');
 
 // 1. Scan directory structure to generate tree (ignoring unneeded directories/files)
 function generateFileTree(dir, prefix = '', isLast = true) {
   const dirName = path.basename(dir);
   
-  const ignoreList = ['.git', '.next', 'node_modules', '.vercel', '.env.local', 'tmp-next-dev.out.log', 'tmp-next-dev.err.log', 'Screenshot 2026-03-31 150239.png'];
+  const ignoreList = [
+    '.git',
+    '.next',
+    '.expo',
+    '.gradle',
+    'android',
+    'build',
+    'dist',
+    'node_modules',
+    'web-build',
+    '.vercel',
+    '.env.local',
+    'tmp-next-dev.out.log',
+    'tmp-next-dev.err.log',
+    'Screenshot 2026-03-31 150239.png',
+  ];
   if (ignoreList.includes(dirName)) {
     return '';
   }
@@ -96,7 +112,42 @@ function getDependenciesMarkdown() {
   }
 }
 
-// 3. Extract SQL Database Schema from scripts/init-db.js
+// 3. Extract mobile dependencies from mobile/package.json
+function getMobileDependenciesMarkdown() {
+  if (!fs.existsSync(MOBILE_PACKAGE_JSON_PATH)) {
+    return '*(mobile/package.json not found)*';
+  }
+
+  try {
+    const pkg = JSON.parse(fs.readFileSync(MOBILE_PACKAGE_JSON_PATH, 'utf8'));
+    const deps = pkg.dependencies || {};
+    const roleMap = {
+      expo: 'React Native wrapper framework / Expo SDK runtime',
+      'expo-av': 'Native audio playback and audio session handling',
+      'expo-dev-client': 'Development Client runtime for custom native modules',
+      'expo-secure-store': 'Secure credentials, session, API base URL and settings storage',
+      'expo-speech-recognition': 'Native on-device/cloud speech recognition bridge for mobile STT',
+      'expo-status-bar': 'Native status bar integration',
+      react: 'Mobile UI runtime',
+      'react-native': 'Mobile framework core',
+    };
+
+    let md = '| Library | Version | Role in Project |\n';
+    md += '|---------|---------|-----------------|\n';
+
+    for (const [name, version] of Object.entries(deps)) {
+      const role = roleMap[name] || 'Mobile supporting library';
+      md += `| \`${name}\` | \`${version}\` | ${role} |\n`;
+    }
+
+    return md;
+  } catch (error) {
+    console.error('âŒ Error parsing mobile/package.json:', error.message);
+    return '*(Error parsing mobile/package.json)*';
+  }
+}
+
+// 4. Extract SQL Database Schema from scripts/init-db.js
 function getDatabaseSchemaMarkdown() {
   if (!fs.existsSync(INIT_DB_PATH)) {
     return '*(scripts/init-db.js not found)*';
@@ -189,7 +240,7 @@ CREATE TABLE users (
   }
 }
 
-// 4. Main runner function
+// 5. Main runner function
 function updateSkillFile() {
   console.log('🔄 Starting project Skill update...');
 
@@ -210,6 +261,11 @@ function updateSkillFile() {
   console.log('📦 Extracting dependencies...');
   const depsMarkdown = getDependenciesMarkdown();
   skillContent = replacePlaceholder(skillContent, 'SKILL_DEP_START', 'SKILL_DEP_END', depsMarkdown);
+
+  // B2. Update Mobile Dependencies
+  console.log('ðŸ“± Extracting mobile dependencies...');
+  const mobileDepsMarkdown = getMobileDependenciesMarkdown();
+  skillContent = replacePlaceholder(skillContent, 'SKILL_MOBILE_DEP_START', 'SKILL_MOBILE_DEP_END', mobileDepsMarkdown);
 
   // C. Update Database Schemas
   console.log('🗃 Extracting database structure...');

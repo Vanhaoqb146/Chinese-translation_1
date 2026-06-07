@@ -1,12 +1,146 @@
+import { requireAuth } from '@/lib/auth';
+import { enforceRateLimit, rateLimitHeaders } from '@/lib/rateLimit';
+
+export const maxDuration = 60;
+
+function timedJson(body, {
+  status = 200,
+  startedAt,
+  timings = {},
+  headers = {},
+  requestId = null,
+}) {
+  const totalMs = Date.now() - startedAt;
+  const responseTimings = { ...timings, totalMs };
+  const serverTiming = [
+    ...Object.entries(timings).map(([name, duration]) => (
+      `${name.replace(/Ms$/, '')};dur=${Math.max(0, Math.round(duration))}`
+    )),
+    `total;dur=${Math.max(0, Math.round(totalMs))}`,
+  ].join(', ');
+
+  return Response.json(
+    { ok: status < 400, ...body, requestId, timings: responseTimings },
+    {
+      status,
+      headers: {
+        'Server-Timing': serverTiming,
+        ...(requestId ? { 'X-Request-ID': requestId } : {}),
+        ...headers,
+      },
+    }
+  );
+}
+
+function allowClientApiKeys() {
+  return process.env.ALLOW_CLIENT_API_KEYS === 'true' || process.env.NODE_ENV !== 'production';
+}
+
+const OPENAI_TRANSLATION_MODELS = new Set([
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.4-mini',
+  'gpt-5.4-nano',
+]);
+
+function getProviderConfig(engine, clientApiKey = '') {
+  const canUseClientKey = allowClientApiKeys();
+
+  if (engine === 'deepseek') {
+    return {
+      provider: 'deepseek',
+      url: 'https://api.deepseek.com/v1/chat/completions',
+      model: 'deepseek-chat',
+      apiKey: process.env.DEEPSEEK_API_KEY || (canUseClientKey ? clientApiKey : ''),
+    };
+  }
+
+  const model = OPENAI_TRANSLATION_MODELS.has(engine) ? engine : 'gpt-5.4-mini';
+
+  return {
+    provider: 'openai',
+    url: 'https://api.openai.com/v1/chat/completions',
+    model,
+    apiKey: process.env.OPENAI_API_KEY || (canUseClientKey ? clientApiKey : ''),
+  };
+}
+
+function createChatCompletionPayload(cfg, messages, { stream = false } = {}) {
+  const payload = {
+    model: cfg.model,
+    messages,
+    stream,
+  };
+
+  if (cfg.provider === 'openai') {
+    payload.max_completion_tokens = 1000;
+    return payload;
+  }
+
+  payload.max_tokens = 1000;
+  payload.temperature = 0.2;
+  return payload;
+}
+
+const CJK_CHARS = /[\u3400-\u9fff]/;
+const KANA_CHARS = /[\u3040-\u30ff]/;
+const HANGUL_CHARS = /[\uac00-\ud7af]/;
+const LATIN_CHARS = /[a-zA-Z]/;
+const VIET_D = /[đĐ]/;
+
+function isLikelyLanguage(text, lang) {
+  const value = (text || '').trim();
+  if (!value) return false;
+
+  const hasCjk = CJK_CHARS.test(value);
+  const hasKana = KANA_CHARS.test(value);
+  const hasHangul = HANGUL_CHARS.test(value);
+  const hasLatin = LATIN_CHARS.test(value);
+  const decomposed = value.normalize('NFD');
+  const hasVietnamese = /[\u0300-\u036f]/.test(decomposed) || VIET_D.test(value);
+
+  if (lang === 'zh') return hasCjk;
+  if (lang === 'ja') return hasKana || hasCjk;
+  if (lang === 'ko') return hasHangul;
+  if (lang === 'vi') return !hasCjk && !hasKana && !hasHangul && (hasLatin || hasVietnamese);
+  if (lang === 'en') return hasLatin && !hasCjk && !hasKana && !hasHangul && !hasVietnamese;
+  return true;
+}
+
 export async function POST(request) {
+  const startedAt = Date.now();
+  const requestId = request.headers.get('x-request-id') || `translate-${startedAt.toString(36)}`;
+
   try {
+    const auth = await requireAuth(request);
+    if (auth.response) return auth.response;
+
+    const limit = enforceRateLimit(request, {
+      name: 'translate',
+      user: auth.user,
+      limit: 180,
+      windowMs: 60_000,
+    });
+    if (limit.response) return limit.response;
+
     const body = await request.json();
     // BỔ SUNG: Nhận thêm mảng history từ frontend
     const { text, sourceLang, targetLang, engine, history = [] } = body;
-    const apiKey = body.apiKey || process.env.OPENAI_API_KEY || '';
+    const cfg = getProviderConfig(engine, body.apiKey || '');
+    console.log(`[Translate][${requestId}] started source=${sourceLang} target=${targetLang} model=${cfg.model} chars=${typeof text === 'string' ? text.length : 0}`);
 
     if (!text || !sourceLang || !targetLang) {
-      return Response.json({ error: 'Missing required fields' }, { status: 400 });
+      return timedJson(
+        { error: 'Missing required fields' },
+        { status: 400, startedAt, headers: rateLimitHeaders(limit.result), requestId }
+      );
+    }
+
+    if (typeof text !== 'string' || text.length > 6000) {
+      return timedJson(
+        { error: 'Text is too long' },
+        { status: 400, startedAt, headers: rateLimitHeaders(limit.result), requestId }
+      );
     }
 
     const langNames = {
@@ -18,17 +152,7 @@ export async function POST(request) {
     const targetName = langNames[targetLang] || targetLang;
 
     // Try LLM first (OpenAI or DeepSeek)
-    if (apiKey) {
-      // Map engine/model dynamically
-      let cfg = { url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o' };
-      if (engine === 'deepseek') {
-        cfg = { url: 'https://api.deepseek.com/v1/chat/completions', model: 'deepseek-chat' };
-      } else if (engine === 'gpt-5.4-mini' || engine === 'gpt-5.4-nano') {
-        cfg = { url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o-mini' };
-      } else if (engine === 'gpt-5.4') {
-        cfg = { url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o' };
-      }
-
+    if (cfg.apiKey) {
       // [FIX BUG 2] STRICT TRANSLATION-ONLY SYSTEM PROMPT
       // Sử dụng tiếng Anh, cực kỳ rõ ràng, cấm GPT trả lời câu hỏi hoặc nói chuyện
       const systemPrompt = `You are a professional, direct translation engine. Your ONLY task is to translate text from ${sourceName} to ${targetName}.
@@ -53,17 +177,19 @@ REMEMBER: You are a TRANSLATION ENGINE, not a chatbot. Your output must ALWAYS b
         { role: 'system', content: systemPrompt }
       ];
 
-      // Đưa khoảng 4 câu lịch sử gần nhất, wrap trong khung dịch thuật rõ ràng
-      // để GPT không nhầm history là cuộc hội thoại cần tiếp tục
+      // Đưa khoảng 4 câu lịch sử gần nhất vào system context để GPT hiểu ngữ cảnh
+      // nhưng không dùng role user/assistant chứa prefix để tránh model copy pattern prefix ở output.
       if (history && history.length > 0) {
         const recentHistory = history.slice(-4);
+        let historyContextText = `\n\nTranslation history for context (use ONLY for pronoun resolution, style, and tone consistency; do NOT output any of these prefix labels or translate them):\n`;
+        
         recentHistory.forEach(msg => {
           const role = msg.role || 'user';
-          const prefix = role === 'user'
-            ? `[Previous ${sourceName} input]:`
-            : `[Previous ${targetName} translation]:`;
-          messages.push({ role, content: `${prefix} ${msg.content}` });
+          const label = role === 'user' ? sourceName : targetName;
+          historyContextText += `[Previous ${label}]: ${msg.content}\n`;
         });
+        
+        messages[0].content += historyContextText;
       }
 
       // Thêm câu nói hiện tại cần dịch vào cuối, wrap rõ ràng
@@ -76,15 +202,9 @@ REMEMBER: You are a TRANSLATION ENGINE, not a chatbot. Your output must ALWAYS b
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              Authorization: `Bearer ${apiKey}`,
+              Authorization: `Bearer ${cfg.apiKey}`,
             },
-            body: JSON.stringify({
-              model: cfg.model,
-              messages,
-              max_tokens: 1000,
-              temperature: 0.2,
-              stream: true,
-            }),
+            body: JSON.stringify(createChatCompletionPayload(cfg, messages, { stream: true })),
             signal: AbortSignal.timeout(30000),
           });
 
@@ -153,23 +273,22 @@ REMEMBER: You are a TRANSLATION ENGINE, not a chatbot. Your output must ALWAYS b
               'Content-Type': 'text/event-stream',
               'Cache-Control': 'no-cache',
               'Connection': 'keep-alive',
+              'X-Translate-Model': cfg.model,
+              'X-Translate-Engine': engine || 'openai',
+              ...rateLimitHeaders(limit.result),
             },
           });
         }
 
         // ====== NON-STREAMING MODE (Standard — giữ nguyên) ======
+        const llmStartedAt = Date.now();
         const res = await fetch(cfg.url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${cfg.apiKey}`,
           },
-          body: JSON.stringify({
-            model: cfg.model,
-            messages: messages,
-            max_tokens: 1000,
-            temperature: 0.2,
-          }),
+          body: JSON.stringify(createChatCompletionPayload(cfg, messages)),
           signal: AbortSignal.timeout(25000),
         });
 
@@ -179,10 +298,88 @@ REMEMBER: You are a TRANSLATION ENGINE, not a chatbot. Your output must ALWAYS b
         }
 
         const data = await res.json();
-        return Response.json({
-          translation: data.choices[0].message.content.trim(),
-          engine: engine || 'openai',
-        });
+        const llmMs = Date.now() - llmStartedAt;
+        let translation = data.choices[0].message.content.trim();
+
+        // Clean up any leaked prefixes from the translation
+        const prefixesToRemove = [
+          `[Previous ${sourceName} input]:`,
+          `[Previous ${targetName} translation]:`,
+          `[Previous ${targetName} input]:`,
+          `[Previous ${sourceName} translation]:`,
+          `Previous ${sourceName} input:`,
+          `Previous ${targetName} translation:`,
+          `Previous ${targetName} input:`,
+          `Previous ${sourceName} translation:`,
+          `[Previous translation]:`,
+          `[Translation]:`,
+          `Translation:`
+        ];
+        
+        for (const p of prefixesToRemove) {
+          if (translation.toLowerCase().startsWith(p.toLowerCase())) {
+            translation = translation.slice(p.length).trim();
+            // Remove outer quotes if the model wrapped the translation in quotes
+            translation = translation.replace(/^["'“`](.*)["'”`]$/g, '$1').trim();
+          }
+        }
+
+        if (!isLikelyLanguage(translation, targetLang)) {
+          console.warn(
+            `[Translate Guard] Output did not look like ${targetLang}; requesting a repair pass.`
+          );
+
+          const repairMessages = [
+            {
+              role: 'system',
+              content: `You are a strict translation repair engine. Translate from ${sourceName} to ${targetName}. Output ONLY ${targetName} text, with no notes.`,
+            },
+            {
+              role: 'user',
+              content: `The previous output was invalid because it was not ${targetName}. Translate this text to ${targetName} only:\n${text}`,
+            },
+          ];
+
+          const repairRes = await fetch(cfg.url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${cfg.apiKey}`,
+            },
+            body: JSON.stringify(createChatCompletionPayload(cfg, repairMessages)),
+            signal: AbortSignal.timeout(15000),
+          });
+
+          if (repairRes.ok) {
+            const repairData = await repairRes.json();
+            const repaired = repairData.choices?.[0]?.message?.content?.trim() || '';
+            if (isLikelyLanguage(repaired, targetLang)) {
+              translation = repaired;
+            }
+          }
+        }
+
+        console.log(`[Translate][${requestId}] timings=${JSON.stringify({
+          llmMs,
+          totalMs: Date.now() - startedAt,
+        })}`);
+        return timedJson(
+          {
+            translation,
+            engine: engine || 'openai',
+            model: cfg.model,
+          },
+          {
+            startedAt,
+            timings: { llmMs },
+            requestId,
+            headers: {
+              'X-Translate-Model': cfg.model,
+              'X-Translate-Engine': engine || 'openai',
+              ...rateLimitHeaders(limit.result),
+            },
+          }
+        );
       } catch (llmErr) {
         console.warn('LLM failed, falling back to MyMemory:', llmErr.message);
         // Fall through to MyMemory
@@ -190,12 +387,24 @@ REMEMBER: You are a TRANSLATION ENGINE, not a chatbot. Your output must ALWAYS b
     }
 
     // Fallback: MyMemory (free)
+    const fallbackStartedAt = Date.now();
     const translation = await translateWithMyMemory(text, sourceLang, targetLang);
-    return Response.json({ translation, engine: 'mymemory' });
+    return timedJson(
+      { translation, engine: 'mymemory' },
+      {
+        startedAt,
+        timings: { fallbackMs: Date.now() - fallbackStartedAt },
+        requestId,
+        headers: {
+          'X-Translate-Engine': 'mymemory',
+          ...rateLimitHeaders(limit.result),
+        },
+      }
+    );
 
   } catch (err) {
-    console.error('Translation error:', err);
-    return Response.json({ error: err.message }, { status: 500 });
+    console.error(`[Translate][${requestId}] error:`, err);
+    return timedJson({ error: err.message }, { status: 500, startedAt, requestId });
   }
 }
 

@@ -23,6 +23,11 @@ export default function AdminDashboard() {
     try {
       const res = await fetch('/api/admin/users');
       const data = await res.json();
+      if (res.status === 401 || res.status === 403) {
+        localStorage.removeItem('vt_user');
+        router.push('/');
+        return;
+      }
       if (res.ok) setUsers(data.users);
       else setError(data.error);
     } catch { setError('Lỗi kết nối máy chủ'); }

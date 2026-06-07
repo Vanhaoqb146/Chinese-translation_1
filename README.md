@@ -53,7 +53,7 @@ Chinese-translation_1/
 │   │   │   └── page.js
 │   │   └── api/                      # API Routes (Server-side)
 │   │       ├── whisper/route.js      # Nhận diện giọng nói (OpenAI Whisper)
-│   │       ├── translate/route.js    # Dịch thuật (GPT-4o-mini / DeepSeek)
+│   │       ├── translate/route.js    # Dịch thuật (GPT-5.x / DeepSeek)
 │   │       ├── auth/login/route.js   # Xác thực đăng nhập
 │   │       └── admin/users/route.js  # CRUD quản lý người dùng
 │   ├── components/
@@ -87,7 +87,7 @@ Hiển thị interim text (realtime)
     ↓
 1s im lặng → auto-stop → lấy final transcript
     ↓
-Gọi API /api/translate (GPT-4o-mini)
+Gọi API /api/translate (GPT-5.x)
     ↓
 Hiển thị bản dịch + Tự động phát TTS
     ↓
@@ -275,7 +275,7 @@ Hook quản lý hàng đợi dịch thuật.
 | Next.js | 16.1.6 | Framework full-stack (App Router) |
 | React | 19.2.3 | UI Library |
 | OpenAI Whisper API | Latest | Nhận diện giọng nói (STT) |
-| OpenAI GPT-4o-mini | Latest | Dịch thuật thông minh |
+| OpenAI GPT-5.4-mini / GPT-5.5 | Latest | Dịch thuật thông minh |
 | Web Speech API | Built-in | STT cho chế độ Dịch thuật |
 | SpeechSynthesis API | Built-in | Text-to-Speech (TTS) |
 | Web Audio API | Built-in | Thu âm PCM + VAD cho chế độ Giao tiếp |

@@ -572,7 +572,7 @@ export default function SimultaneousPanel({
               letterSpacing: "0.5px",
             }}
           >
-            🎙️ DỊCH SONG SONG
+            🎙️ GIAO TIẾP SONG SONG
           </span>
           {conv.queueLength > 0 && (
             <span
@@ -627,7 +627,7 @@ export default function SimultaneousPanel({
                 🎙️
               </div>
               <div style={{ fontWeight: "bold", color: "var(--text1)" }}>
-                Chế độ Dịch song song (Simultaneous)
+                Chế độ Giao tiếp song song (Simultaneous)
               </div>
               <div
                 className="conv-empty-sub"
@@ -828,7 +828,7 @@ export default function SimultaneousPanel({
                 {convStatus === "idle" && "🎙 Bấm để bắt đầu Dịch đuổi"}
                 {convStatus === "connecting" && "⏳ Kết nối mic..."}
                 {convStatus === "listening" && "🟢 Micro mở liên tục..."}
-                {convStatus === "translating" && "⏳ Đang dịch song song..."}
+                {convStatus === "translating" && "⏳ Đang giao tiếp song song..."}
                 {convStatus === "speaking" &&
                   (overlapListening ? (
                     <div
@@ -1079,7 +1079,7 @@ export default function SimultaneousPanel({
           />
           <div className="drawer-content">
             <div className="drawer-header">
-              <h3>⚙️ Thiết lập Dịch song song</h3>
+              <h3>⚙️ Thiết lập Giao tiếp song song</h3>
               <button
                 className="drawer-close-btn"
                 onClick={() => setDrawerOpen(false)}
@@ -1579,7 +1579,7 @@ export default function SimultaneousPanel({
                   border: "1px solid rgba(255,77,79,0.15)",
                 }}
               >
-                ⚠️ Khuyên dùng khoảng im lặng 2s - 3s để dịch song song có trải
+                ⚠️ Khuyên dùng khoảng im lặng 2s - 3s để giao tiếp song song có trải
                 nghiệm bám đuổi tốt nhất!
               </div>
             </div>

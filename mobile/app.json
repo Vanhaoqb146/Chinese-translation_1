@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "VoiceTranslate AI",
+    "slug": "voicetranslate-ai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0c1a2a"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.voicetranslate.ai",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Ứng dụng cần truy cập Microphone để thu âm giọng nói dịch thuật trực tiếp.",
+        "NSSpeechRecognitionUsageDescription": "Ứng dụng cần quyền nhận dạng giọng nói để chuyển đổi lời nói thành văn bản và dịch thuật."
+      }
+    },
+    "android": {
+      "package": "com.voicetranslate.ai",
+      "permissions": [
+        "RECORD_AUDIO",
+        "MODIFY_AUDIO_SETTINGS"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#0c1a2a",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Ứng dụng cần truy cập Microphone để thu âm giọng nói dịch thuật trực tiếp và nhận dạng giọng nói thời gian thực.",
+          "speechRecognitionPermission": "Ứng dụng cần quyền nhận dạng giọng nói để chuyển lời nói thành văn bản.",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox",
+            "com.google.android.tts"
+          ]
+        }
+      ],
+      "./withAndroidSpeechRecognitionAec",
+      "./withAndroidResolutionStrategy",
+      "./withAndroidAecRecorder"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "6a4cdd0b-e3c2-43b4-8d87-356c5a3e2f34"
+      }
+    }
+  }
+}

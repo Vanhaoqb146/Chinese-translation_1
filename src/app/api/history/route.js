@@ -1,94 +1,130 @@
 import { sql } from '@vercel/postgres';
-import { NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/auth';
+import { jsonError, jsonOk } from '@/lib/apiResponse';
+import { enforceRateLimit, rateLimitHeaders } from '@/lib/rateLimit';
 
-// GET /api/history?userId=xxx — Lấy 100 bản ghi mới nhất
+function mapHistoryRow(row) {
+  return {
+    id: row.id,
+    source: row.source_text,
+    target: row.target_text,
+    fromLang: row.from_lang,
+    toLang: row.to_lang,
+    createdAt: row.created_at,
+    time: new Date(row.created_at).toLocaleTimeString('vi-VN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZone: 'Asia/Ho_Chi_Minh',
+    }),
+  };
+}
+
+async function authorizeHistory(request, name, limit = 120) {
+  const auth = await requireAuth(request);
+  if (auth.response) return auth;
+
+  const rate = enforceRateLimit(request, {
+    name,
+    user: auth.user,
+    limit,
+    windowMs: 60_000,
+  });
+  if (rate.response) return { response: rate.response };
+
+  return { user: auth.user, rate: rate.result };
+}
+
 export async function GET(request) {
   try {
-    const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId');
-
-    if (!userId) {
-      return NextResponse.json({ error: 'userId is required' }, { status: 400 });
-    }
+    const auth = await authorizeHistory(request, 'history-get');
+    if (auth.response) return auth.response;
 
     const { rows } = await sql`
       SELECT id, source_text, target_text, from_lang, to_lang, created_at
       FROM conversation_history
-      WHERE user_id = ${userId}
+      WHERE user_id = ${auth.user.username}
       ORDER BY created_at DESC
       LIMIT 500
     `;
 
-    // Map sang format frontend
-    const history = rows.map(row => ({
-      id: row.id,
-      source: row.source_text,
-      target: row.target_text,
-      fromLang: row.from_lang,
-      toLang: row.to_lang,
-      createdAt: row.created_at,
-      time: new Date(row.created_at).toLocaleTimeString('vi-VN', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit',
-        timeZone: 'Asia/Ho_Chi_Minh',
-      }),
-    }));
-
-    return NextResponse.json({ history });
+    return jsonOk(
+      { history: rows.map(mapHistoryRow) },
+      { headers: rateLimitHeaders(auth.rate) }
+    );
   } catch (error) {
-    console.error('❌ [History GET]', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('[History GET]', error);
+    return jsonError(error.message, { status: 500 });
   }
 }
 
-// POST /api/history — Lưu 1 bản ghi mới
 export async function POST(request) {
   try {
-    const body = await request.json();
-    const { userId, source, target, fromLang, toLang } = body;
+    const auth = await authorizeHistory(request, 'history-post', 180);
+    if (auth.response) return auth.response;
 
-    if (!userId || !source || !target) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+    const { source, target, fromLang, toLang } = await request.json();
+    const cleanSource = typeof source === 'string' ? source.trim() : '';
+    const cleanTarget = typeof target === 'string' ? target.trim() : '';
+
+    if (!cleanSource || !cleanTarget) {
+      return jsonError('Missing required fields', { status: 400 });
     }
 
     const { rows } = await sql`
       INSERT INTO conversation_history (user_id, source_text, target_text, from_lang, to_lang)
-      VALUES (${userId}, ${source}, ${target}, ${fromLang || ''}, ${toLang || ''})
+      VALUES (${auth.user.username}, ${cleanSource}, ${cleanTarget}, ${fromLang || ''}, ${toLang || ''})
       RETURNING id, created_at
     `;
 
-    return NextResponse.json({
-      success: true,
-      id: rows[0].id,
-      createdAt: rows[0].created_at,
-    });
+    return jsonOk(
+      {
+        success: true,
+        id: rows[0].id,
+        createdAt: rows[0].created_at,
+      },
+      { headers: rateLimitHeaders(auth.rate) }
+    );
   } catch (error) {
-    console.error('❌ [History POST]', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('[History POST]', error);
+    return jsonError(error.message, { status: 500 });
   }
 }
 
-// DELETE /api/history — Xóa 1 bản ghi (id) hoặc tất cả (userId)
 export async function DELETE(request) {
   try {
+    const auth = await authorizeHistory(request, 'history-delete', 60);
+    if (auth.response) return auth.response;
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
-    const userId = searchParams.get('userId');
 
     if (id) {
-      // Xóa 1 bản ghi
-      const result = await sql`DELETE FROM conversation_history WHERE id = ${Number(id)}`;
-      return NextResponse.json({ success: true, deleted: result.rowCount });
+      const numericId = Number(id);
+      if (!Number.isInteger(numericId) || numericId <= 0) {
+        return jsonError('Invalid history id', { status: 400 });
+      }
+
+      const result = await sql`
+        DELETE FROM conversation_history
+        WHERE id = ${numericId} AND user_id = ${auth.user.username}
+      `;
+      return jsonOk(
+        { success: true, deleted: result.rowCount },
+        { headers: rateLimitHeaders(auth.rate) }
+      );
     }
 
-    if (userId) {
-      // Xóa tất cả của user
-      const result = await sql`DELETE FROM conversation_history WHERE user_id = ${userId}`;
-      return NextResponse.json({ success: true, deleted: result.rowCount });
-    }
-
-    return NextResponse.json({ error: 'id or userId is required' }, { status: 400 });
+    const result = await sql`
+      DELETE FROM conversation_history
+      WHERE user_id = ${auth.user.username}
+    `;
+    return jsonOk(
+      { success: true, deleted: result.rowCount },
+      { headers: rateLimitHeaders(auth.rate) }
+    );
   } catch (error) {
-    console.error('❌ [History DELETE]', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('[History DELETE]', error);
+    return jsonError(error.message, { status: 500 });
   }
 }
