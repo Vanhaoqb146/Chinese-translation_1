@@ -3,6 +3,7 @@ package __ANDROID_AEC_PACKAGE__
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -50,6 +51,7 @@ class AndroidAecRecorderModule(
   private var aec: AcousticEchoCanceler? = null
   private var ns: NoiseSuppressor? = null
   private var agc: AutomaticGainControl? = null
+  private var backgroundTimer: java.util.Timer? = null
 
   override fun getName(): String = "AndroidAecRecorder"
 
@@ -131,6 +133,74 @@ class AndroidAecRecorderModule(
       promise.resolve(result)
     } catch (error: Exception) {
       promise.reject("E_STOP_AEC_RECORDER", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun startForegroundService(options: ReadableMap?, promise: Promise) {
+    val title = options?.getString("title") ?: "VoiceTranslate AI đang chạy ẩn"
+    val body = options?.getString("body") ?: "Microphone đang hoạt động ở chế độ nền..."
+    try {
+      val intent = Intent(reactContext, VoiceTranslateService::class.java).apply {
+        putExtra("title", title)
+        putExtra("body", body)
+      }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        reactContext.startForegroundService(intent)
+      } else {
+        reactContext.startService(intent)
+      }
+      promise.resolve(true)
+    } catch (e: Exception) {
+      promise.reject("E_START_SERVICE", e.message, e)
+    }
+  }
+
+  @ReactMethod
+  fun stopForegroundService(promise: Promise) {
+    try {
+      val intent = Intent(reactContext, VoiceTranslateService::class.java)
+      reactContext.stopService(intent)
+      promise.resolve(true)
+    } catch (e: Exception) {
+      promise.reject("E_STOP_SERVICE", e.message, e)
+    }
+  }
+
+  @ReactMethod
+  fun startBackgroundTimer(delayMs: Int, promise: Promise) {
+    synchronized(this) {
+      try {
+        backgroundTimer?.cancel()
+        backgroundTimer = java.util.Timer()
+        backgroundTimer?.schedule(object : java.util.TimerTask() {
+          override fun run() {
+            synchronized(this@AndroidAecRecorderModule) {
+              backgroundTimer = null
+            }
+            promise.resolve(true)
+          }
+        }, delayMs.toLong())
+      } catch (e: Exception) {
+        promise.reject("E_START_TIMER", e.message, e)
+      }
+    }
+  }
+
+  @ReactMethod
+  fun cancelBackgroundTimer(promise: Promise) {
+    synchronized(this) {
+      try {
+        if (backgroundTimer != null) {
+          backgroundTimer?.cancel()
+          backgroundTimer = null
+          promise.resolve(true)
+        } else {
+          promise.resolve(false)
+        }
+      } catch (e: Exception) {
+        promise.reject("E_CANCEL_TIMER", e.message, e)
+      }
     }
   }
 

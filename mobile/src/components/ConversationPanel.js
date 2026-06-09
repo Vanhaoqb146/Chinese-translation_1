@@ -10,6 +10,8 @@ import {
   Alert,
   Modal,
   Switch,
+  NativeModules,
+  Platform,
 } from 'react-native';
 import { Audio } from 'expo-av';
 import { Feather } from '@expo/vector-icons';
@@ -19,7 +21,11 @@ import {
   isSpeechMeteringActive,
   startSpeechAudioRecording,
   stopSpeechAudioRecording,
+  startBackgroundService,
+  stopBackgroundService,
 } from '../services/speechAudioRecorder';
+
+const AndroidAecRecorder = NativeModules.AndroidAecRecorder || null;
 import {
   detectMobileTextLanguage,
   getMobileAutoDetectLanguages,
@@ -154,6 +160,72 @@ export default function ConversationPanel({
   const liveTextRef = useRef('');
   const silenceTimerRef = useRef(null);
 
+  const clearSilenceTimer = () => {
+    if (Platform.OS === 'android' && AndroidAecRecorder) {
+      AndroidAecRecorder.cancelBackgroundTimer().catch(() => {});
+    }
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+  };
+
+  const startSilenceTimer = (langType, seconds) => {
+    clearSilenceTimer();
+    if (Platform.OS === 'android' && AndroidAecRecorder) {
+      AndroidAecRecorder.startBackgroundTimer(seconds * 1000)
+        .then((fired) => {
+          if (fired) {
+            stopRecognitionAndTranslate(langType);
+          }
+        })
+        .catch((err) => {
+          console.warn('[🎙 Conv] Native background timer failed, fallback:', err);
+          silenceTimerRef.current = setTimeout(() => {
+            stopRecognitionAndTranslate(langType);
+          }, seconds * 1000);
+        });
+    } else {
+      silenceTimerRef.current = setTimeout(() => {
+        stopRecognitionAndTranslate(langType);
+      }, seconds * 1000);
+    }
+  };
+
+  const triggerContinuousMicRestart = (langType) => {
+    if (Platform.OS === 'android' && AndroidAecRecorder) {
+      AndroidAecRecorder.cancelBackgroundTimer()
+        .then(() => AndroidAecRecorder.startBackgroundTimer(500))
+        .then((fired) => {
+          if (fired && micModeRef.current === 'continuous' && isManualRecording) {
+            if (autoDetect) {
+              if (!autoListeningWantedRef.current) return;
+              startRecordingLoop('auto');
+            } else {
+              startRecordingLoop(langType || activeManualLangRef.current || 'src');
+            }
+          }
+        })
+        .catch((err) => {
+          console.warn('[🎙 Conv] Restart timer failed, starting immediately:', err);
+          if (micModeRef.current === 'continuous' && isManualRecording) {
+            startRecordingLoop(langType || activeManualLangRef.current || 'src');
+          }
+        });
+    } else {
+      setTimeout(() => {
+        if (micModeRef.current === 'continuous' && isManualRecording) {
+          if (autoDetect) {
+            if (!autoListeningWantedRef.current) return;
+            startRecordingLoop('auto');
+          } else {
+            startRecordingLoop(langType || activeManualLangRef.current || 'src');
+          }
+        }
+      }, 500);
+    }
+  };
+
   // Refs for tracking speech recognition and async state boundaries
   const micModeRef = useRef(micMode);
   const silenceSecondsRef = useRef(silenceSeconds);
@@ -170,29 +242,38 @@ export default function ConversationPanel({
 
   const scrollViewRef = useRef(null);
 
+  const muteSrcRef = useRef(muteSrc);
+  const muteTgtRef = useRef(muteTgt);
+  const srcVoiceRef = useRef(srcVoice);
+  const tgtVoiceRef = useRef(tgtVoice);
+  const providerRef = useRef(provider);
+  const speedRef = useRef(speed);
+  const autoTTSRef = useRef(autoTTS);
+  const autoDetectRef = useRef(autoDetect);
+  const isManualRecordingRef = useRef(isManualRecording);
+  const isProcessingRef = useRef(isProcessing);
+  const isTtsPlayingRef = useRef(false);
+  const chatLogRef = useRef(chatLog);
+
   // Sync state values to Refs to avoid stale closures in metering callbacks
   useEffect(() => {
     micModeRef.current = micMode;
     silenceSecondsRef.current = silenceSeconds;
     activeManualLangRef.current = activeManualLang;
-  }, [micMode, silenceSeconds, activeManualLang]);
+    muteSrcRef.current = muteSrc;
+    muteTgtRef.current = muteTgt;
+    srcVoiceRef.current = srcVoice;
+    tgtVoiceRef.current = tgtVoice;
+    providerRef.current = provider;
+    speedRef.current = speed;
+    autoTTSRef.current = autoTTS;
+    autoDetectRef.current = autoDetect;
+    isManualRecordingRef.current = isManualRecording;
+    isProcessingRef.current = isProcessing;
+    chatLogRef.current = chatLog;
+  }, [micMode, silenceSeconds, activeManualLang, muteSrc, muteTgt, srcVoice, tgtVoice, provider, speed, autoTTS, autoDetect, isManualRecording, isProcessing, chatLog]);
 
-  // Auto loop in continuous mode when TTS stops playing
-  useEffect(() => {
-    if (!isPlaying && micMode === 'continuous' && isManualRecording && !isProcessing && !isRecordingRef.current) {
-      const timer = setTimeout(() => {
-        if (autoDetect) {
-          if (!autoListeningWantedRef.current) return;
-          startRecordingLoop('auto');
-          return;
-        }
-        startRecordingLoop(activeManualLangRef.current || 'src');
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-    // startRecordingLoop reads current refs; adding it here would recreate the loop on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoDetect, isPlaying, micMode, isManualRecording, isProcessing]);
+  // Auto loop in continuous mode when TTS stops playing (Removed in favor of Callback-based restarters)
 
   // Load saved settings on mount
   useEffect(() => {
@@ -260,11 +341,13 @@ export default function ConversationPanel({
       autoListeningWantedRef.current = false;
       autoCaptureGenerationRef.current += 1;
       cleanupRecording();
+      stopBackgroundService();
     };
   }, []);
 
   const cleanupRecording = async () => {
     try {
+      clearSilenceTimer();
       setIsSpeechActive(false);
       if (audioRecordingRef.current) {
         const recording = audioRecordingRef.current;
@@ -320,11 +403,13 @@ export default function ConversationPanel({
     isRecordingRef.current = false;
     audioHasSpeechRef.current = false;
     setIsSpeechActive(false);
+    isManualRecordingRef.current = false;
     setIsManualRecording(false);
     activeManualLangRef.current = null;
     setActiveManualLang(null);
     setLiveText('');
     liveTextRef.current = '';
+    await stopBackgroundService();
 
     const recording = audioRecordingRef.current;
     audioRecordingRef.current = null;
@@ -408,11 +493,19 @@ export default function ConversationPanel({
         return;
       }
 
+      if (!isManualRecordingRef.current) {
+        await startBackgroundService(
+          'VoiceTranslate AI đang chạy ẩn',
+          'Chế độ giao tiếp đang hoạt động ở chế độ nền.'
+        );
+      }
+
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
         shouldDuckAndroid: true,
         playThroughEarpieceAndroid: false,
+        staysActiveInBackground: true,
       });
 
       // Clear any running instance
@@ -433,10 +526,11 @@ export default function ConversationPanel({
       const tgtLang = LANGUAGES[tgtIdx];
       const allowedAutoCodes = getAllowedAutoCodes(srcLang, tgtLang);
 
-      if (autoDetect && langType === 'auto') {
+      if (autoDetectRef.current && langType === 'auto') {
         if (!autoListeningWantedRef.current) return;
         const captureGeneration = ++autoCaptureGenerationRef.current;
         isRecordingRef.current = true;
+        isManualRecordingRef.current = true;
         setIsManualRecording(true);
         activeManualLangRef.current = langType;
         setActiveManualLang(langType);
@@ -458,10 +552,7 @@ export default function ConversationPanel({
           liveTextRef.current = e.value[0];
           
           if (micModeRef.current !== 'hold') {
-            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-            silenceTimerRef.current = setTimeout(() => {
-              stopRecognitionAndTranslate(langType);
-            }, silenceSecondsRef.current * 1000);
+            startSilenceTimer(langType, silenceSecondsRef.current);
           }
         }
       };
@@ -472,10 +563,7 @@ export default function ConversationPanel({
           liveTextRef.current = e.value[0];
 
           if (micModeRef.current !== 'hold') {
-            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-            silenceTimerRef.current = setTimeout(() => {
-              stopRecognitionAndTranslate(langType);
-            }, silenceSecondsRef.current * 1000);
+            startSilenceTimer(langType, silenceSecondsRef.current);
           }
         }
       };
@@ -486,11 +574,27 @@ export default function ConversationPanel({
       };
 
       Voice.onSpeechLanguageDetection = (e) => {
-        if (!autoDetect || langType !== 'auto') return;
+        if (!autoDetectRef.current || langType !== 'auto') return;
 
         const detectedCode = normalizeDetectedLanguage(e?.detectedLanguage);
         if (detectedCode && allowedAutoCodes.includes(detectedCode) && e?.confidence !== 0) {
           detectedAutoLangRef.current = detectedCode;
+        }
+      };
+
+      Voice.onRecognitionEnd = () => {
+        setIsSpeechActive(false);
+        isRecordingRef.current = false;
+
+        if (
+          micModeRef.current === 'continuous' &&
+          isManualRecordingRef.current &&
+          !isProcessingRef.current &&
+          !isTtsPlayingRef.current &&
+          !isRecordingRef.current
+        ) {
+          console.log('[🎙 Conv] Recognition ended unexpectedly in continuous mode, restarting...');
+          triggerContinuousMicRestart(langType);
         }
       };
 
@@ -505,6 +609,7 @@ export default function ConversationPanel({
       };
 
       isRecordingRef.current = true;
+      isManualRecordingRef.current = true;
       setIsManualRecording(true);
       activeManualLangRef.current = langType;
       setActiveManualLang(langType);
@@ -527,6 +632,7 @@ export default function ConversationPanel({
     } = options;
 
     setIsProcessing(true);
+    isProcessingRef.current = true;
     try {
       const srcLang = LANGUAGES[srcIdx];
       const tgtLang = LANGUAGES[tgtIdx];
@@ -534,7 +640,7 @@ export default function ConversationPanel({
       let inputLang = srcLang;
       let outputLang = tgtLang;
 
-      if (autoDetect && langType === 'auto') {
+      if (autoDetectRef.current && langType === 'auto') {
         const detectedLang = resolveAutoDetectedLanguage(
           textToTranslate,
           detectedLangOverride || detectedAutoLangRef.current,
@@ -552,7 +658,7 @@ export default function ConversationPanel({
         outputLang = srcLang;
       }
 
-      const historyContext = chatLog.slice(-4).flatMap((msg) => ([
+      const historyContext = chatLogRef.current.slice(-4).flatMap((msg) => ([
         { role: msg.isUser ? 'user' : 'assistant', content: msg.sourceText },
         { role: msg.isUser ? 'assistant' : 'user', content: msg.translatedText },
       ]));
@@ -603,7 +709,11 @@ export default function ConversationPanel({
         time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
       };
 
-      setChatLog(prev => [...prev, newEntry]);
+      setChatLog(prev => {
+        const next = [...prev, newEntry];
+        chatLogRef.current = next;
+        return next;
+      });
 
       if (user?.username) {
         api.saveHistory({
@@ -618,21 +728,37 @@ export default function ConversationPanel({
       }
 
       const currentVoice = getSafeVoiceForLang(
-        provider,
+        providerRef.current,
         outputLang.translateCode,
-        outputLang.translateCode === srcLang.translateCode ? srcVoice : tgtVoice
+        outputLang.translateCode === srcLang.translateCode ? srcVoiceRef.current : tgtVoiceRef.current
       );
       const currentTtsCode = outputLang.ttsCode;
-      const isMuted = (outputLang.translateCode === srcLang.translateCode && muteSrc) ||
-                      (outputLang.translateCode === tgtLang.translateCode && muteTgt);
+      const isMuted = (outputLang.translateCode === srcLang.translateCode && muteSrcRef.current) ||
+                      (outputLang.translateCode === tgtLang.translateCode && muteTgtRef.current);
 
-      if (autoTTS && !isMuted) {
-        await playTts(translation, currentTtsCode, currentVoice, { provider, speed });
+      if (autoTTSRef.current && !isMuted) {
+        isTtsPlayingRef.current = true;
+        await playTts(translation, currentTtsCode, currentVoice, {
+          provider: providerRef.current,
+          speed: speedRef.current,
+          onPlaybackFinished: () => {
+            isTtsPlayingRef.current = false;
+            if (shouldResumeContinuous) {
+              triggerContinuousMicRestart(langType);
+            }
+          }
+        });
+      } else {
+        isTtsPlayingRef.current = false;
+        if (shouldResumeContinuous) {
+          triggerContinuousMicRestart(langType);
+        }
       }
     } catch (e) {
       console.warn('Voice translation failed:', e);
     } finally {
       setIsProcessing(false);
+      isProcessingRef.current = false;
       if (!shouldResumeContinuous) {
         activeManualLangRef.current = null;
         setActiveManualLang(null);
@@ -658,17 +784,19 @@ export default function ConversationPanel({
     }
 
     if (!isRecordingRef.current) return;
-    const isAzureAutoCapture = autoDetect && langType === 'auto' && audioRecordingRef.current;
+    const isAzureAutoCapture = autoDetectRef.current && langType === 'auto' && audioRecordingRef.current;
     isRecordingRef.current = false;
     setIsSpeechActive(false);
     
     // Continuous mode only resumes after silence-triggered translation, not after manual stop.
     if (!shouldResumeContinuous) {
-      if (autoDetect && langType === 'auto') {
+      if (autoDetectRef.current && langType === 'auto') {
         autoListeningWantedRef.current = false;
       }
       activeManualLangRef.current = null;
+      isManualRecordingRef.current = false;
       setIsManualRecording(false);
+      await stopBackgroundService();
     }
 
     try {
@@ -752,15 +880,27 @@ export default function ConversationPanel({
           setActiveManualLang(null);
           setIsManualRecording(false);
         } else {
-          setTimeout(() => startRecordingLoop(langType), 350);
+          if (Platform.OS === 'android' && AndroidAecRecorder) {
+            AndroidAecRecorder.cancelBackgroundTimer()
+              .then(() => AndroidAecRecorder.startBackgroundTimer(350))
+              .then((fired) => {
+                if (fired) startRecordingLoop(langType);
+              })
+              .catch(() => startRecordingLoop(langType));
+          } else {
+            setTimeout(() => startRecordingLoop(langType), 350);
+          }
         }
         return;
       }
 
       await Voice.stop();
+      try {
+        await Voice.destroy();
+      } catch (e) {}
 
       // Wait briefly for Voice events to settle
-      setTimeout(async () => {
+      const runSettleAndTranslate = async () => {
         const textToTranslate = liveTextRef.current;
         setLiveText('');
         liveTextRef.current = '';
@@ -772,9 +912,31 @@ export default function ConversationPanel({
             activeManualLangRef.current = null;
             setActiveManualLang(null);
             setIsManualRecording(false);
+          } else {
+            if (Platform.OS === 'android' && AndroidAecRecorder) {
+              AndroidAecRecorder.cancelBackgroundTimer()
+                .then(() => AndroidAecRecorder.startBackgroundTimer(350))
+                .then((fired) => {
+                  if (fired) startRecordingLoop(langType);
+                })
+                .catch(() => startRecordingLoop(langType));
+            } else {
+              setTimeout(() => startRecordingLoop(langType), 350);
+            }
           }
         }
-      }, 300);
+      };
+
+      if (Platform.OS === 'android' && AndroidAecRecorder) {
+        AndroidAecRecorder.cancelBackgroundTimer()
+          .then(() => AndroidAecRecorder.startBackgroundTimer(300))
+          .then((fired) => {
+            if (fired) runSettleAndTranslate();
+          })
+          .catch(() => runSettleAndTranslate());
+      } else {
+        setTimeout(runSettleAndTranslate, 300);
+      }
     } catch (err) {
       console.error('Failed to stop Voice recording', err);
       setIsManualRecording(false);

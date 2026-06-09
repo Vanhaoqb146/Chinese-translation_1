@@ -17,6 +17,7 @@ import Voice from '../services/speechRecognition';
 import { COLORS, SIZES } from '../theme';
 import MicrophonePulse from './MicrophonePulse';
 import { VOICE_OPTIONS_AZURE, VOICE_OPTIONS_ELEVENLABS } from '../lib/voiceOptions';
+import { startBackgroundService, stopBackgroundService } from '../services/speechAudioRecorder';
 
 const DEFAULT_QUICK_SILENCE_SECONDS = 1.0;
 const MIN_QUICK_SILENCE_SECONDS = 0.8;
@@ -206,11 +207,17 @@ export default function QuickTalkPanel({
         return;
       }
 
+      await startBackgroundService(
+        'VoiceTranslate AI đang nghe...',
+        'Giao tiếp nhanh đang hoạt động ở chế độ nền.'
+      );
+
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
         shouldDuckAndroid: true,
         playThroughEarpieceAndroid: false,
+        staysActiveInBackground: true,
       });
 
       // Reset any running instance
@@ -388,21 +395,26 @@ export default function QuickTalkPanel({
                 provider: providerRef.current,
                 speed: speedRef.current,
               });
+            } else {
+              await stopBackgroundService();
             }
           } catch (e) {
             console.warn('Voice translation failed:', e);
+            await stopBackgroundService();
           } finally {
             setIsProcessing(false);
             setActiveManualLang(null);
           }
         } else {
           setActiveManualLang(null);
+          await stopBackgroundService();
         }
       }, 300);
     } catch (err) {
       console.error('Failed to stop Voice recording:', err);
       setActiveManualLang(null);
       isRecordingRef.current = false;
+      await stopBackgroundService();
     }
   };
 

@@ -24,6 +24,7 @@ import ConversationPanel from './src/components/ConversationPanel';
 import QuickTalkPanel from './src/components/QuickTalkPanel';
 import SimultaneousPanel from './src/components/SimultaneousPanel';
 import { TRANSLATION_MODELS, DEFAULT_TRANSLATION_MODEL, normalizeTranslationModel } from './src/lib/translationModels';
+import { startBackgroundService, stopBackgroundService } from './src/services/speechAudioRecorder';
 
 const LANGUAGES = [
   { flag: '🇨🇳', name: '中文', translateCode: 'zh', ttsCode: 'zh-CN', ttsVoice: 'zh-CN-XiaoxiaoMultilingualNeural' },
@@ -403,6 +404,10 @@ export default function App() {
       }
 
       await stopAudio();
+      await startBackgroundService(
+        'VoiceTranslate AI đang nghe...',
+        'Nhận dạng giọng nói đang hoạt động.'
+      );
 
       // Configure Voice listeners dynamically before starting
       Voice.onSpeechStart = () => {
@@ -455,6 +460,8 @@ export default function App() {
         const textToTranslate = finalTextRef.current || partialTextRef.current;
         if (textToTranslate?.trim()) {
           processVoiceTranslationText(textToTranslate.trim());
+        } else {
+          stopBackgroundService();
         }
       };
       finalizeRecognitionRef.current = finalizeRecognition;
@@ -544,6 +551,7 @@ export default function App() {
     } catch (e) {
       console.error('Live translation processing failed:', e);
       setTranslatedText(`Lỗi kết nối: ${e.message}`);
+      stopBackgroundService();
     } finally {
       setIsTranslating(false);
     }
@@ -562,6 +570,7 @@ export default function App() {
         playsInSilentModeIOS: true,
         shouldDuckAndroid: true,
         playThroughEarpieceAndroid: false,
+        staysActiveInBackground: true,
       });
 
       const { sound: newSound } = await Audio.Sound.createAsync(
@@ -588,6 +597,12 @@ export default function App() {
             ttsPlayerRef.current = null;
             setSound(null);
             setIsPlaying(false);
+            if (viewMode === 'standard') {
+              await stopBackgroundService();
+            }
+            if (options.onPlaybackFinished) {
+              try { options.onPlaybackFinished(); } catch (e) {}
+            }
           }
           return;
         }
@@ -601,6 +616,12 @@ export default function App() {
             await newSound.unloadAsync();
           } catch (e) {}
           setSound(null);
+          if (viewMode === 'standard') {
+            await stopBackgroundService();
+          }
+          if (options.onPlaybackFinished) {
+            try { options.onPlaybackFinished(); } catch (e) {}
+          }
         }
       });
     } catch (error) {
@@ -608,6 +629,12 @@ export default function App() {
       ttsPlayerRef.current = null;
       setSound(null);
       setIsPlaying(false);
+      if (viewMode === 'standard') {
+        await stopBackgroundService();
+      }
+      if (options.onPlaybackFinished) {
+        try { options.onPlaybackFinished(); } catch (e) {}
+      }
     }
   };
 

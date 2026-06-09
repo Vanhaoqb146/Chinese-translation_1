@@ -16,7 +16,7 @@
 * **Project Name:** VoiceTranslate AI
 * **Description:** Real-time voice translation app, supporting multi-language, AI-integrated (Whisper + GPT) with a modern Premium Dark Theme interface.
 * **Target Platforms:** Next.js Web App + Native Mobile App (Android/iOS via Expo SDK 54)
-* **Last Updated:** 2026-06-07
+* **Last Updated:** 2026-06-09
 * **Self-Update Command:** `node scripts/update-skill.js`
 
 ---
@@ -58,7 +58,8 @@ Chinese-translation_1/
 │   ├── plugins/
 │   │   └── android-aec/
 │   │       ├── AndroidAecRecorderModule.kt
-│   │       └── AndroidAecRecorderPackage.kt
+│   │       ├── AndroidAecRecorderPackage.kt
+│   │       └── VoiceTranslateService.kt
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── ConversationPanel.js

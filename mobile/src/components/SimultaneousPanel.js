@@ -10,15 +10,21 @@ import {
   Alert,
   Modal,
   Switch,
+  NativeModules,
+  Platform,
 } from 'react-native';
 import { Audio } from 'expo-av';
 import { Feather } from '@expo/vector-icons';
 import Voice from '../services/speechRecognition';
+
+const AndroidAecRecorder = NativeModules.AndroidAecRecorder || null;
 import {
   MIN_SPEECH_CAPTURE_MS,
   isSpeechMeteringActive,
   startSpeechAudioRecording,
   stopSpeechAudioRecording,
+  startBackgroundService,
+  stopBackgroundService,
 } from '../services/speechAudioRecorder';
 import {
   detectMobileTextLanguage,
@@ -330,26 +336,7 @@ export default function SimultaneousPanel({
     isTtsPlayingRef.current = isPlaying;
   }, [isPlaying]);
 
-  useEffect(() => {
-    if (!overlapListening && !isPlaying && isActive && !isProcessing && !isRecordingRef.current) {
-      const restartDelay = useHeadphonesRef.current
-        ? MIC_RESTART_AFTER_TTS_HEADPHONES_MS
-        : MIC_RESTART_AFTER_TTS_SPEAKER_MS;
-      const timer = setTimeout(() => {
-        startContinuousMicLoop(activeInputLangRef.current || (autoDetectRef.current ? 'auto' : 'src'));
-      }, restartDelay);
-      return () => clearTimeout(timer);
-    }
-    // startContinuousMicLoop reads live refs, so it should not be a dependency here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying, isActive, isProcessing, overlapListening]);
-
-  useEffect(() => {
-    if (!overlapListening && isPlaying) {
-      cleanupRecording();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying, overlapListening]);
+  // Micro-loop recheck state effect (Removed in favor of Callback-based and Queue-based mic restarters)
 
   useEffect(() => {
     async function loadSettings() {
@@ -411,14 +398,40 @@ export default function SimultaneousPanel({
       isActiveRef.current = false;
       clearSilenceTimer();
       cleanupRecording();
+      stopBackgroundService();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const clearSilenceTimer = () => {
+    if (Platform.OS === 'android' && AndroidAecRecorder) {
+      AndroidAecRecorder.cancelBackgroundTimer().catch(() => {});
+    }
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
+    }
+  };
+
+  const startSilenceTimer = (langType, seconds) => {
+    clearSilenceTimer();
+    if (Platform.OS === 'android' && AndroidAecRecorder) {
+      AndroidAecRecorder.startBackgroundTimer(seconds * 1000)
+        .then((fired) => {
+          if (fired) {
+            stopRecognitionAndQueue(langType);
+          }
+        })
+        .catch((err) => {
+          console.warn('[🎙 Sim] Native background timer failed, fallback:', err);
+          silenceTimerRef.current = setTimeout(() => {
+            stopRecognitionAndQueue(langType);
+          }, seconds * 1000);
+        });
+    } else {
+      silenceTimerRef.current = setTimeout(() => {
+        stopRecognitionAndQueue(langType);
+      }, seconds * 1000);
     }
   };
 
@@ -518,6 +531,10 @@ export default function SimultaneousPanel({
   const startSimultaneous = async (langType) => {
     const nextLangType = autoDetect ? 'auto' : langType;
     await stopAudio();
+    await startBackgroundService(
+      'VoiceTranslate AI đang chạy ẩn',
+      'Chế độ giao tiếp song song đang hoạt động ở chế độ nền.'
+    );
     stoppingRef.current = false;
     captureSessionRef.current += 1;
     recognitionSequenceRef.current = 0;
@@ -564,6 +581,7 @@ export default function SimultaneousPanel({
     await restoreTtsVolume();
     await stopAudio();
     await cleanupRecording();
+    await stopBackgroundService();
   };
 
   const handlePressMic = async (langType) => {
@@ -593,10 +611,7 @@ export default function SimultaneousPanel({
       duckTtsVolume();
     }
 
-    clearSilenceTimer();
-    silenceTimerRef.current = setTimeout(() => {
-      stopRecognitionAndQueue(langType);
-    }, silenceSecondsRef.current * 1000);
+    startSilenceTimer(langType, silenceSecondsRef.current);
   };
 
   const startAzureAutoRecording = async (langType, captureSession, captureId) => {
@@ -714,6 +729,7 @@ export default function SimultaneousPanel({
         playsInSilentModeIOS: true,
         shouldDuckAndroid: true,
         playThroughEarpieceAndroid: false,
+        staysActiveInBackground: true,
       });
 
       try {
@@ -792,10 +808,44 @@ export default function SimultaneousPanel({
         console.warn('Voice recognition error inside SimultaneousPanel:', event);
         isRecordingRef.current = false;
         setIsSpeechActive(false);
-        if (isActiveRef.current && (overlapListeningRef.current || !isTtsPlayingRef.current)) {
-          setTimeout(() => {
-            startContinuousMicLoop(activeInputLangRef.current || getFallbackLangType());
-          }, 500);
+      };
+
+      Voice.onRecognitionEnd = () => {
+        setIsSpeechActive(false);
+        isRecordingRef.current = false;
+
+        if (
+          isActiveRef.current &&
+          !isProcessingQueueRef.current &&
+          !isTtsPlayingRef.current &&
+          !isRecordingRef.current
+        ) {
+          console.log('[🎙 Sim] Recognition ended unexpectedly, restarting mic...');
+          const restartDelay = useHeadphonesRef.current
+            ? MIC_RESTART_AFTER_TTS_HEADPHONES_MS
+            : MIC_RESTART_AFTER_TTS_SPEAKER_MS;
+          
+          const triggerRestart = () => {
+            if (
+              isActiveRef.current &&
+              !isProcessingQueueRef.current &&
+              !isTtsPlayingRef.current &&
+              !isRecordingRef.current
+            ) {
+              startContinuousMicLoop(activeInputLangRef.current || getFallbackLangType());
+            }
+          };
+
+          if (Platform.OS === 'android' && AndroidAecRecorder) {
+            AndroidAecRecorder.cancelBackgroundTimer()
+              .then(() => AndroidAecRecorder.startBackgroundTimer(restartDelay))
+              .then((fired) => {
+                if (fired) triggerRestart();
+              })
+              .catch(() => triggerRestart());
+          } else {
+            setTimeout(triggerRestart, restartDelay);
+          }
         }
       };
 
@@ -1188,7 +1238,16 @@ export default function SimultaneousPanel({
       }
 
       await Voice.stop();
-      await new Promise(resolve => setTimeout(resolve, 300));
+      try {
+        await Voice.destroy();
+      } catch (e) {}
+
+      if (Platform.OS === 'android' && AndroidAecRecorder) {
+        await AndroidAecRecorder.cancelBackgroundTimer();
+        await AndroidAecRecorder.startBackgroundTimer(300);
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
 
       if (
         autoDetectRef.current &&
@@ -1230,11 +1289,21 @@ export default function SimultaneousPanel({
         overlapListeningRef.current &&
         !restartScheduled
       ) {
-        setTimeout(() => {
+        const triggerRestart = () => {
           if (!stoppingRef.current && captureSessionRef.current === captureSession) {
             startContinuousMicLoop(langType);
           }
-        }, 150);
+        };
+        if (Platform.OS === 'android' && AndroidAecRecorder) {
+          AndroidAecRecorder.cancelBackgroundTimer()
+            .then(() => AndroidAecRecorder.startBackgroundTimer(150))
+            .then((fired) => {
+              if (fired) triggerRestart();
+            })
+            .catch(() => triggerRestart());
+        } else {
+          setTimeout(triggerRestart, 150);
+        }
       } else if (
         !stoppingRef.current &&
         captureSessionRef.current === captureSession &&
@@ -1242,11 +1311,21 @@ export default function SimultaneousPanel({
         !isTtsPlayingRef.current &&
         translationQueueRef.current.length === 0
       ) {
-        setTimeout(() => {
+        const triggerRestart = () => {
           if (!stoppingRef.current && captureSessionRef.current === captureSession) {
             startContinuousMicLoop(langType);
           }
-        }, 500);
+        };
+        if (Platform.OS === 'android' && AndroidAecRecorder) {
+          AndroidAecRecorder.cancelBackgroundTimer()
+            .then(() => AndroidAecRecorder.startBackgroundTimer(500))
+            .then((fired) => {
+              if (fired) triggerRestart();
+            })
+            .catch(() => triggerRestart());
+        } else {
+          setTimeout(triggerRestart, 500);
+        }
       }
     }
   };
@@ -1359,6 +1438,9 @@ export default function SimultaneousPanel({
           if (isActiveRef.current && autoTTSRef.current && !isMuted) {
             ttsSessionRef.current += 1;
             activeTtsLangRef.current = task.toLang;
+            if (!overlapListeningRef.current) {
+              await cleanupRecording();
+            }
             await playSimultaneousTts(
               translation,
               task.outputLang.ttsCode,
@@ -1390,7 +1472,7 @@ export default function SimultaneousPanel({
           const restartDelay = useHeadphonesRef.current
             ? MIC_RESTART_AFTER_TTS_HEADPHONES_MS
             : MIC_RESTART_AFTER_TTS_SPEAKER_MS;
-          setTimeout(() => {
+          const triggerRestart = () => {
             if (
               isActiveRef.current &&
               !overlapListeningRef.current &&
@@ -1399,7 +1481,17 @@ export default function SimultaneousPanel({
             ) {
               startContinuousMicLoop(activeInputLangRef.current || getFallbackLangType());
             }
-          }, restartDelay);
+          };
+          if (Platform.OS === 'android' && AndroidAecRecorder) {
+            AndroidAecRecorder.cancelBackgroundTimer()
+              .then(() => AndroidAecRecorder.startBackgroundTimer(restartDelay))
+              .then((fired) => {
+                if (fired) triggerRestart();
+              })
+              .catch(() => triggerRestart());
+          } else {
+            setTimeout(triggerRestart, restartDelay);
+          }
         }
       }
     }
@@ -1487,6 +1579,7 @@ export default function SimultaneousPanel({
         playsInSilentModeIOS: true,
         shouldDuckAndroid: true,
         playThroughEarpieceAndroid: false,
+        staysActiveInBackground: true,
       });
 
       const initialVolume = overlapListeningRef.current && !useHeadphonesRef.current

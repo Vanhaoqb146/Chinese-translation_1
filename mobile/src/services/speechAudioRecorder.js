@@ -41,6 +41,28 @@ const androidAecRecorderEvents = AndroidAecRecorder
   : null;
 let androidAecAvailabilityPromise = null;
 
+export async function startBackgroundService(title, body) {
+  if (Platform.OS === 'android' && AndroidAecRecorder) {
+    try {
+      await AndroidAecRecorder.startForegroundService({ title, body });
+      console.log('[🎙 Foreground Service] Started successfully:', title);
+    } catch (e) {
+      console.warn('[🎙 Foreground Service] start error:', e);
+    }
+  }
+}
+
+export async function stopBackgroundService() {
+  if (Platform.OS === 'android' && AndroidAecRecorder) {
+    try {
+      await AndroidAecRecorder.stopForegroundService();
+      console.log('[🎙 Foreground Service] Stopped successfully');
+    } catch (e) {
+      console.warn('[🎙 Foreground Service] stop error:', e);
+    }
+  }
+}
+
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function runRecordingOperation(operation) {
