@@ -314,10 +314,16 @@ export default function useSimultaneousConversation({
       const transcript = e.result.text;
       if (!transcript) return;
 
-      // Echo cancellation: Bỏ qua toàn bộ âm thanh khi robot đang phát loa ngoài (không tai nghe)
+      // Echo cancellation: Quyết định có bỏ qua âm thanh dựa trên cặp ngôn ngữ của mic và loa
       if (activeTtsLangRef.current && !useHeadphonesRef.current) {
-        console.log(`🛡️ [AEC Echo Guard] Bỏ qua interim vì robot đang phát loa (${activeTtsLangRef.current}) và không dùng tai nghe`);
-        return;
+        const shouldBlock = 
+          (inputLangRef.current === activeTtsLangRef.current) || // Cùng ngôn ngữ thì chắc chắn dội âm
+          (inputLangRef.current === 'zh' && activeTtsLangRef.current === 'vi'); // Mic Trung nhạy cảm với loa Việt
+
+        if (shouldBlock) {
+          console.log(`🛡️ [AEC Echo Guard] Bỏ qua interim vì robot đang phát loa ${activeTtsLangRef.current} (mic: ${inputLangRef.current}) và không dùng tai nghe`);
+          return;
+        }
       }
 
       if (autoDetectRef.current) {
@@ -355,10 +361,16 @@ export default function useSimultaneousConversation({
       const transcript = e.result.text;
       if (!transcript) return;
 
-      // Echo cancellation: Bỏ qua toàn bộ âm thanh khi robot đang phát loa ngoài (không tai nghe)
+      // Echo cancellation: Quyết định có bỏ qua âm thanh dựa trên cặp ngôn ngữ của mic và loa
       if (activeTtsLangRef.current && !useHeadphonesRef.current) {
-        console.log(`🛡️ [AEC Echo Guard] Bỏ qua FINAL vì robot đang phát loa (${activeTtsLangRef.current}) và không dùng tai nghe`);
-        return;
+        const shouldBlock = 
+          (inputLangRef.current === activeTtsLangRef.current) || // Cùng ngôn ngữ thì chắc chắn dội âm
+          (inputLangRef.current === 'zh' && activeTtsLangRef.current === 'vi'); // Mic Trung nhạy cảm với loa Việt
+
+        if (shouldBlock) {
+          console.log(`🛡️ [AEC Echo Guard] Bỏ qua FINAL vì robot đang phát loa ${activeTtsLangRef.current} (mic: ${inputLangRef.current}) và không dùng tai nghe`);
+          return;
+        }
       }
 
       if (autoDetectRef.current) {
