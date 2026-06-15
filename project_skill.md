@@ -16,7 +16,7 @@
 * **Project Name:** VoiceTranslate AI
 * **Description:** Real-time voice translation app, supporting multi-language, AI-integrated (Whisper + GPT) with a modern Premium Dark Theme interface.
 * **Target Platforms:** Next.js Web App + Native Mobile App (Android/iOS via Expo SDK 54)
-* **Last Updated:** 2026-06-09
+* **Last Updated:** 2026-06-15
 * **Self-Update Command:** `node scripts/update-skill.js`
 
 ---
@@ -226,7 +226,12 @@ Core dependencies read directly from `package.json`:
   - Development client APK: `https://expo.dev/accounts/vanhaoqb146/projects/voicetranslate-ai/builds/41c9884f-2dd8-4221-b099-d4fac587a908`
   - Preview APK: `https://expo.dev/accounts/vanhaoqb146/projects/voicetranslate-ai/builds/09e2ae52-8a28-4815-a85f-141ddd681d1a`
 * **Development Loop:** Install the development client APK, then run `cd mobile` and `npx.cmd expo start --dev-client` on Windows PowerShell. Use `npx.cmd expo start --dev-client --tunnel` when the phone cannot reach the LAN Metro server.
-* **EAS Builds:** Use `npx.cmd eas-cli build --platform android --profile development --clear-cache --non-interactive` for a development APK and `--profile preview` for a standalone internal-test APK.
+* **EAS Cloud Builds:** Use `npx.cmd eas-cli build --platform android --profile development --clear-cache --non-interactive` for a development APK and `--profile preview` for a standalone internal-test APK.
+* **Local Android Builds (Windows):** The local build environment is fully configured on the laptop using Java JDK 23 (at `C:\Program Files\Java\jdk-23` via `JAVA_HOME`) and Android SDK (at `C:\Users\Admin\AppData\Local\Android\Sdk` via `ANDROID_HOME`). Future AI turns should prefer local builds to avoid Expo Cloud constraints:
+  - **Run Development Client:** Run `cd mobile` then `npx.cmd expo run:android` to compile and install the debug development client directly on a connected emulator or real USB device.
+  - **Compile Standalone Debug APK:** Run `cd mobile/android` then `./gradlew.bat assembleDebug`. The compiled APK is saved at: `mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
+  - **Compile Standalone Release APK:** Run `cd mobile/android` then `./gradlew.bat assembleRelease`. The compiled APK is saved at: `mobile/android/app/build/outputs/apk/release/app-release.apk`.
+  - **Compile Local EAS Build:** Run `cd mobile` then `eas build --platform android --local --profile preview`.
 
 ---
 
@@ -416,6 +421,8 @@ When modifying code, **never compromise** these established edge-case workaround
 22. **Protected Manual Speaker-Overlap Regression Boundary:** Before accepting an auto-detect speaker-overlap patch, confirm the diff does not change the manual `recognitionOptions.androidLiveAec` condition, `speechRecognition.js`, `withAndroidSpeechRecognitionAec.js`, `TTS_DUCK_VOLUME_SPEAKER = 0.40`, or non-auto queue/callback logic. Any necessary shared edit requires explicit justification plus regression checks for manual speaker overlap, manual headphones, overlap off, QuickTalk, Conversation, and Standard.
 23. **Conversation Auto Stop Must Discard:** Do not call `stopRecognitionAndTranslate()` when the user presses the active Auto mic button in Conversation mode. Call the auto-capture cancellation path instead. This prevents tiny residual recordings from being transcribed into hallucinations such as `"You"` after the user has explicitly turned the mic off.
 24. **Conversation Early-Whisper Scope:** `allowEarlyWhisper` is an opt-in latency optimization for Conversation Auto only. Do not enable it for Simultaneous until its separate auto-detect speaker-overlap accuracy work is verified.
+25. **Android Background Continuous Microphone:** Start the microphone foreground service while the app is visible and never release the physical microphone between continuous-mode turns. Android auto-detect capture uses one persistent native `AudioRecord` and rotates WAV segments while discarding audio during non-listening TTS gaps. Android manual Conversation/Simultaneous keeps one `expo-speech-recognition` session alive and suppresses transcript callbacks during translation/TTS plus a short echo guard. Only stop the persistent recorder or destroy the recognizer when the user turns the mode off, the component unmounts, or an unrecoverable error ends the session. Native changes require rebuilding the app.
+26. **Android Background JS Execution:** A microphone foreground service and wake lock keep native capture alive but do not guarantee that React Native callbacks, VAD, API requests, or TTS scheduling continue after the Activity is backgrounded. `VoiceTranslateService` must also own the long-running `VoiceTranslateKeepAlive` Headless JS task. Continuous Android modes must fail clearly when the persistent native APIs are missing; never silently fall back to the JS-driven `expo-av` recorder because its status callbacks can be suspended until the app returns to the foreground. Any change to this service, task, or native API requires rebuilding and reinstalling the Android app.
 
 ---
 

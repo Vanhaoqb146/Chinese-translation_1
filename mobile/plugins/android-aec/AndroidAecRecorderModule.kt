@@ -23,6 +23,7 @@ import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.UUID
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.sqrt
@@ -35,16 +36,36 @@ class AndroidAecRecorderModule(
     private const val DEFAULT_SAMPLE_RATE = 16000
     private const val DEFAULT_STATUS_INTERVAL_MS = 250L
     private const val WAV_HEADER_BYTES = 44L
+
+    @Volatile
+    private var activeInstance: AndroidAecRecorderModule? = null
+
+    fun stopActiveRecorderFromService() {
+      activeInstance?.let { instance ->
+        synchronized(instance) {
+          instance.stopRecordingBlocking()
+        }
+      }
+    }
   }
+
+  private data class SegmentResult(
+    val file: File?,
+    val sizeBytes: Long,
+    val durationMs: Long
+  )
 
   @Volatile
   private var isRecording = false
   private var recordingThread: Thread? = null
   private var audioRecord: AudioRecord? = null
   private var outputFile: File? = null
+  private var outputWav: RandomAccessFile? = null
   private var outputDataBytes = 0L
   private var startedAtMs = 0L
   private var sampleRate = DEFAULT_SAMPLE_RATE
+  private var persistentMode = false
+  private var enableAecForCurrentSession = true
   private var audioManager: AudioManager? = null
   private var previousAudioMode: Int? = null
   private var previousSpeakerphoneOn: Boolean? = null
@@ -52,6 +73,11 @@ class AndroidAecRecorderModule(
   private var ns: NoiseSuppressor? = null
   private var agc: AutomaticGainControl? = null
   private var backgroundTimer: java.util.Timer? = null
+  private val segmentLock = Any()
+
+  init {
+    activeInstance = this
+  }
 
   override fun getName(): String = "AndroidAecRecorder"
 
@@ -84,42 +110,24 @@ class AndroidAecRecorderModule(
 
   @ReactMethod
   fun start(options: ReadableMap?, promise: Promise) {
-    if (
-      reactContext.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-      PackageManager.PERMISSION_GRANTED
-    ) {
+    if (!hasRecordAudioPermission()) {
       promise.reject("E_PERMISSION", "RECORD_AUDIO permission is not granted")
       return
     }
 
-    synchronized(this) {
-      if (isRecording) {
-        stopRecordingBlocking()
-      }
-    }
-
-    val requestedRate = if (options?.hasKey("sampleRate") == true) {
-      options.getInt("sampleRate")
-    } else {
-      DEFAULT_SAMPLE_RATE
-    }
-    val statusIntervalMs = if (options?.hasKey("statusIntervalMs") == true) {
-      max(100L, options.getInt("statusIntervalMs").toLong())
-    } else {
-      DEFAULT_STATUS_INTERVAL_MS
-    }
-
     try {
-      startRecording(requestedRate, statusIntervalMs)
-      val result = Arguments.createMap().apply {
-        putBoolean("started", true)
-        putBoolean("aecEnabled", aec?.enabled == true)
-        putBoolean("noiseSuppressorEnabled", ns?.enabled == true)
-        putBoolean("agcEnabled", agc?.enabled == true)
-        putInt("audioSessionId", audioRecord?.audioSessionId ?: -1)
-        putInt("sampleRate", sampleRate)
+      synchronized(this) {
+        if (isRecording) {
+          stopRecordingBlocking()
+        }
+        startRecording(
+          requestedSampleRate(options),
+          requestedStatusInterval(options),
+          persistent = false,
+          enableAec = requestedEnableAec(options, defaultValue = true)
+        )
       }
-      promise.resolve(result)
+      promise.resolve(createStartResult())
     } catch (error: Exception) {
       stopRecordingBlocking()
       promise.reject("E_START_AEC_RECORDER", error.message, error)
@@ -129,17 +137,83 @@ class AndroidAecRecorderModule(
   @ReactMethod
   fun stop(promise: Promise) {
     try {
-      val result = stopRecordingBlocking()
-      promise.resolve(result)
+      promise.resolve(stopRecordingBlocking())
     } catch (error: Exception) {
       promise.reject("E_STOP_AEC_RECORDER", error.message, error)
     }
   }
 
   @ReactMethod
+  fun startPersistent(options: ReadableMap?, promise: Promise) {
+    if (!hasRecordAudioPermission()) {
+      promise.reject("E_PERMISSION", "RECORD_AUDIO permission is not granted")
+      return
+    }
+
+    try {
+      synchronized(this) {
+        if (isRecording) {
+          stopRecordingBlocking()
+        }
+        startRecording(
+          requestedSampleRate(options),
+          requestedStatusInterval(options),
+          persistent = true,
+          enableAec = requestedEnableAec(options, defaultValue = false)
+        )
+      }
+      promise.resolve(createStartResult())
+    } catch (error: Exception) {
+      stopRecordingBlocking()
+      promise.reject("E_START_PERSISTENT_RECORDER", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun beginPersistentSegment(promise: Promise) {
+    try {
+      synchronized(this) {
+        if (!isRecording || !persistentMode) {
+          throw IllegalStateException("Persistent microphone session is not active")
+        }
+        synchronized(segmentLock) {
+          if (outputWav != null) {
+            throw IllegalStateException("A persistent recording segment is already active")
+          }
+          openSegmentLocked()
+        }
+      }
+      promise.resolve(createStartResult())
+    } catch (error: Exception) {
+      promise.reject("E_BEGIN_PERSISTENT_SEGMENT", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun finishPersistentSegment(promise: Promise) {
+    try {
+      val segment = synchronized(segmentLock) {
+        finishSegmentLocked()
+      }
+      promise.resolve(createSegmentResultMap(segment))
+    } catch (error: Exception) {
+      promise.reject("E_FINISH_PERSISTENT_SEGMENT", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun stopPersistent(promise: Promise) {
+    try {
+      promise.resolve(stopRecordingBlocking())
+    } catch (error: Exception) {
+      promise.reject("E_STOP_PERSISTENT_RECORDER", error.message, error)
+    }
+  }
+
+  @ReactMethod
   fun startForegroundService(options: ReadableMap?, promise: Promise) {
-    val title = options?.getString("title") ?: "VoiceTranslate AI đang chạy ẩn"
-    val body = options?.getString("body") ?: "Microphone đang hoạt động ở chế độ nền..."
+    val title = options?.getString("title") ?: "VoiceTranslate AI is active"
+    val body = options?.getString("body") ?: "Background microphone is active."
     try {
       val intent = Intent(reactContext, VoiceTranslateService::class.java).apply {
         putExtra("title", title)
@@ -151,8 +225,8 @@ class AndroidAecRecorderModule(
         reactContext.startService(intent)
       }
       promise.resolve(true)
-    } catch (e: Exception) {
-      promise.reject("E_START_SERVICE", e.message, e)
+    } catch (error: Exception) {
+      promise.reject("E_START_SERVICE", error.message, error)
     }
   }
 
@@ -162,9 +236,14 @@ class AndroidAecRecorderModule(
       val intent = Intent(reactContext, VoiceTranslateService::class.java)
       reactContext.stopService(intent)
       promise.resolve(true)
-    } catch (e: Exception) {
-      promise.reject("E_STOP_SERVICE", e.message, e)
+    } catch (error: Exception) {
+      promise.reject("E_STOP_SERVICE", error.message, error)
     }
+  }
+
+  @ReactMethod
+  fun isForegroundServiceRunning(promise: Promise) {
+    promise.resolve(VoiceTranslateService.isRunning)
   }
 
   @ReactMethod
@@ -181,8 +260,8 @@ class AndroidAecRecorderModule(
             promise.resolve(true)
           }
         }, delayMs.toLong())
-      } catch (e: Exception) {
-        promise.reject("E_START_TIMER", e.message, e)
+      } catch (error: Exception) {
+        promise.reject("E_START_TIMER", error.message, error)
       }
     }
   }
@@ -198,14 +277,44 @@ class AndroidAecRecorderModule(
         } else {
           promise.resolve(false)
         }
-      } catch (e: Exception) {
-        promise.reject("E_CANCEL_TIMER", e.message, e)
+      } catch (error: Exception) {
+        promise.reject("E_CANCEL_TIMER", error.message, error)
       }
     }
   }
 
+  private fun hasRecordAudioPermission(): Boolean =
+    reactContext.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+      PackageManager.PERMISSION_GRANTED
+
+  private fun requestedSampleRate(options: ReadableMap?): Int =
+    if (options?.hasKey("sampleRate") == true) {
+      options.getInt("sampleRate")
+    } else {
+      DEFAULT_SAMPLE_RATE
+    }
+
+  private fun requestedStatusInterval(options: ReadableMap?): Long =
+    if (options?.hasKey("statusIntervalMs") == true) {
+      max(100L, options.getInt("statusIntervalMs").toLong())
+    } else {
+      DEFAULT_STATUS_INTERVAL_MS
+    }
+
+  private fun requestedEnableAec(options: ReadableMap?, defaultValue: Boolean): Boolean =
+    if (options?.hasKey("enableAec") == true) {
+      options.getBoolean("enableAec")
+    } else {
+      defaultValue
+    }
+
   @SuppressLint("MissingPermission")
-  private fun startRecording(requestedSampleRate: Int, statusIntervalMs: Long) {
+  private fun startRecording(
+    requestedSampleRate: Int,
+    statusIntervalMs: Long,
+    persistent: Boolean,
+    enableAec: Boolean
+  ) {
     sampleRate = requestedSampleRate
     val minBuffer = AudioRecord.getMinBufferSize(
       sampleRate,
@@ -217,6 +326,11 @@ class AndroidAecRecorderModule(
     }
 
     val bufferSize = max(minBuffer * 2, sampleRate / 5 * 2)
+    val audioSource = if (enableAec) {
+      MediaRecorder.AudioSource.VOICE_COMMUNICATION
+    } else {
+      MediaRecorder.AudioSource.VOICE_RECOGNITION
+    }
     val record = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
       val format = AudioFormat.Builder()
         .setSampleRate(sampleRate)
@@ -224,13 +338,13 @@ class AndroidAecRecorderModule(
         .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
         .build()
       AudioRecord.Builder()
-        .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+        .setAudioSource(audioSource)
         .setAudioFormat(format)
         .setBufferSizeInBytes(bufferSize)
         .build()
     } else {
       AudioRecord(
-        MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+        audioSource,
         sampleRate,
         AudioFormat.CHANNEL_IN_MONO,
         AudioFormat.ENCODING_PCM_16BIT,
@@ -243,24 +357,25 @@ class AndroidAecRecorderModule(
       throw IllegalStateException("AudioRecord failed to initialize")
     }
 
-    configureCommunicationAudioMode()
-    configureAudioEffects(record.audioSessionId)
-
-    val file = File(reactContext.cacheDir, "aec-recording-${System.currentTimeMillis()}.wav")
-    outputFile = file
-    outputDataBytes = 0L
-    startedAtMs = System.currentTimeMillis()
+    persistentMode = persistent
+    enableAecForCurrentSession = enableAec
+    if (enableAec) {
+      configureCommunicationAudioMode()
+      configureAudioEffects(record.audioSessionId)
+    }
+    synchronized(segmentLock) {
+      openSegmentLocked()
+    }
     audioRecord = record
     isRecording = true
 
     recordingThread = Thread({
-      recordLoop(record, file, bufferSize, statusIntervalMs)
+      recordLoop(record, bufferSize, statusIntervalMs)
     }, "AndroidAecRecorder").also { it.start() }
   }
 
   private fun recordLoop(
     record: AudioRecord,
-    file: File,
     bufferSize: Int,
     statusIntervalMs: Long
   ) {
@@ -268,24 +383,22 @@ class AndroidAecRecorderModule(
     var lastStatusAt = 0L
 
     try {
-      RandomAccessFile(file, "rw").use { wav ->
-        writeEmptyWavHeader(wav)
-        record.startRecording()
-
-        while (isRecording) {
-          val read = record.read(buffer, 0, buffer.size)
-          if (read > 0) {
-            wav.write(buffer, 0, read)
-            outputDataBytes += read.toLong()
-            val now = System.currentTimeMillis()
-            if (now - lastStatusAt >= statusIntervalMs) {
-              lastStatusAt = now
-              emitStatus(buffer, read, now)
+      record.startRecording()
+      while (isRecording) {
+        val read = record.read(buffer, 0, buffer.size)
+        if (read > 0) {
+          synchronized(segmentLock) {
+            outputWav?.let { wav ->
+              wav.write(buffer, 0, read)
+              outputDataBytes += read.toLong()
             }
           }
+          val now = System.currentTimeMillis()
+          if (now - lastStatusAt >= statusIntervalMs) {
+            lastStatusAt = now
+            emitStatus(buffer, read, now)
+          }
         }
-
-        updateWavHeader(wav, outputDataBytes, sampleRate)
       }
     } finally {
       isRecording = false
@@ -302,11 +415,19 @@ class AndroidAecRecorderModule(
 
   private fun emitStatus(buffer: ByteArray, length: Int, now: Long) {
     val metering = calculateDb(buffer, length)
+    val segmentState = synchronized(segmentLock) {
+      Pair(outputWav != null, startedAtMs)
+    }
     val payload = Arguments.createMap().apply {
       putBoolean("isRecording", true)
-      putBoolean("androidAec", true)
+      putBoolean("androidAec", enableAecForCurrentSession)
+      putBoolean("persistent", persistentMode)
+      putBoolean("segmentActive", segmentState.first)
       putDouble("metering", metering)
-      putDouble("durationMillis", (now - startedAtMs).toDouble())
+      putDouble(
+        "durationMillis",
+        if (segmentState.first) (now - segmentState.second).toDouble() else 0.0
+      )
     }
     reactContext
       .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
@@ -372,21 +493,85 @@ class AndroidAecRecorderModule(
     agc = null
   }
 
+  @Synchronized
   private fun stopRecordingBlocking(): com.facebook.react.bridge.WritableMap {
     isRecording = false
+    try {
+      if (audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+        audioRecord?.stop()
+      }
+    } catch (_: Exception) {}
     recordingThread?.join(2500)
     recordingThread = null
     audioRecord = null
 
-    val file = outputFile
-    val result = Arguments.createMap().apply {
-      putBoolean("stopped", true)
-      putString("uri", file?.let { Uri.fromFile(it).toString() })
-      putDouble("sizeBytes", file?.length()?.toDouble() ?: 0.0)
-      putDouble("durationMs", (System.currentTimeMillis() - startedAtMs).toDouble())
+    val segment = synchronized(segmentLock) {
+      finishSegmentLocked()
     }
+    persistentMode = false
+    enableAecForCurrentSession = true
+    return createSegmentResultMap(segment).apply {
+      putBoolean("stopped", true)
+    }
+  }
+
+  private fun createStartResult(): com.facebook.react.bridge.WritableMap =
+    Arguments.createMap().apply {
+      putBoolean("started", true)
+      putBoolean("persistent", persistentMode)
+      putBoolean("aecEnabled", enableAecForCurrentSession && aec?.enabled == true)
+      putBoolean("noiseSuppressorEnabled", enableAecForCurrentSession && ns?.enabled == true)
+      putBoolean("agcEnabled", enableAecForCurrentSession && agc?.enabled == true)
+      putInt("audioSessionId", audioRecord?.audioSessionId ?: -1)
+      putInt("sampleRate", sampleRate)
+    }
+
+  private fun createSegmentResultMap(
+    segment: SegmentResult
+  ): com.facebook.react.bridge.WritableMap =
+    Arguments.createMap().apply {
+      putBoolean("stopped", false)
+      putString("uri", segment.file?.let { Uri.fromFile(it).toString() })
+      putDouble("sizeBytes", segment.sizeBytes.toDouble())
+      putDouble("durationMs", segment.durationMs.toDouble())
+    }
+
+  private fun openSegmentLocked() {
+    val file = File(
+      reactContext.cacheDir,
+      "aec-recording-${System.currentTimeMillis()}-${UUID.randomUUID()}.wav"
+    )
+    val wav = RandomAccessFile(file, "rw")
+    writeEmptyWavHeader(wav)
+    outputFile = file
+    outputWav = wav
+    outputDataBytes = 0L
+    startedAtMs = System.currentTimeMillis()
+  }
+
+  private fun finishSegmentLocked(): SegmentResult {
+    val wav = outputWav
+    val file = outputFile
+    val durationMs = if (startedAtMs > 0L) {
+      System.currentTimeMillis() - startedAtMs
+    } else {
+      0L
+    }
+
+    if (wav != null) {
+      updateWavHeader(wav, outputDataBytes, sampleRate)
+      wav.close()
+    }
+
+    val result = SegmentResult(
+      file = file,
+      sizeBytes = file?.length() ?: 0L,
+      durationMs = durationMs
+    )
+    outputWav = null
     outputFile = null
     outputDataBytes = 0L
+    startedAtMs = 0L
     return result
   }
 

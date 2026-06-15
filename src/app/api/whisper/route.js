@@ -15,6 +15,7 @@ export const maxDuration = 60;
 
 // Bản đồ mã ngôn ngữ app → mã ISO 639-1 cho Whisper
 const LANG_TO_ISO = { vi: 'vi', zh: 'zh', en: 'en', ja: 'ja', ko: 'ko' };
+const CJK_KANA_HANGUL_RE = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/;
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 const VIETNAMESE_STT_PROMPT = [
   'Tieng Viet hoi thoai co dau:',
@@ -193,8 +194,9 @@ export async function POST(request) {
       }
     }
 
-    // ========== BỘ LỌC 3: VĂN BẢN QUÁ NGẮN (≤ 2 ký tự) ==========
-    if (text.length <= 2) {
+    // ========== BỘ LỌC 3: VĂN BẢN QUÁ NGẮN (≤ 2 ký tự, bỏ qua nếu chứa chữ Trung/Nhật/Hàn) ==========
+    const isShortAllowed = CJK_KANA_HANGUL_RE.test(text);
+    if (text.length <= 2 && !isShortAllowed) {
       console.log(`🚫 [Whisper Filter] Blocked too-short text: "${text}"`);
       return timedJson(
         { text: '', language: null },

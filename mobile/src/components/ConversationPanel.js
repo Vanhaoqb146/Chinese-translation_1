@@ -21,6 +21,7 @@ import {
   isSpeechMeteringActive,
   startSpeechAudioRecording,
   stopSpeechAudioRecording,
+  stopPersistentSpeechAudioRecording,
   startBackgroundService,
   stopBackgroundService,
 } from '../services/speechAudioRecorder';
@@ -226,6 +227,28 @@ export default function ConversationPanel({
     }
   };
 
+  const resumeKeptVoiceSession = (langType, delayMs = 400) => {
+    const resume = () => {
+      voiceInputSuppressedRef.current = false;
+      if (isRecordingRef.current) {
+        setIsSpeechActive(true);
+      } else {
+        triggerContinuousMicRestart(langType);
+      }
+    };
+
+    if (Platform.OS === 'android' && AndroidAecRecorder) {
+      AndroidAecRecorder.cancelBackgroundTimer()
+        .then(() => AndroidAecRecorder.startBackgroundTimer(delayMs))
+        .then((fired) => {
+          if (fired) resume();
+        })
+        .catch(resume);
+    } else {
+      setTimeout(resume, delayMs);
+    }
+  };
+
   // Refs for tracking speech recognition and async state boundaries
   const micModeRef = useRef(micMode);
   const silenceSecondsRef = useRef(silenceSeconds);
@@ -253,6 +276,7 @@ export default function ConversationPanel({
   const isManualRecordingRef = useRef(isManualRecording);
   const isProcessingRef = useRef(isProcessing);
   const isTtsPlayingRef = useRef(false);
+  const voiceInputSuppressedRef = useRef(false);
   const chatLogRef = useRef(chatLog);
 
   // Sync state values to Refs to avoid stale closures in metering callbacks
@@ -357,6 +381,7 @@ export default function ConversationPanel({
       await Voice.stop();
       await Voice.destroy();
     } catch (e) {}
+    await stopPersistentSpeechAudioRecording();
   };
 
   const handlePressMic = async (langType) => {
@@ -409,7 +434,6 @@ export default function ConversationPanel({
     setActiveManualLang(null);
     setLiveText('');
     liveTextRef.current = '';
-    await stopBackgroundService();
 
     const recording = audioRecordingRef.current;
     audioRecordingRef.current = null;
@@ -420,6 +444,8 @@ export default function ConversationPanel({
         console.warn('[ConversationPanel] Failed to discard auto capture:', error);
       }
     }
+    await stopPersistentSpeechAudioRecording();
+    await stopBackgroundService();
 
     console.log('[🧭 Conv] Auto capture cancelled by user; pending audio discarded.');
   };
@@ -459,6 +485,8 @@ export default function ConversationPanel({
           speechEndedAt: audioLastSpeechAtRef.current,
         });
       }
+    }, {
+      persistentAndroid: micModeRef.current === 'continuous',
     });
 
     if (
@@ -547,6 +575,11 @@ export default function ConversationPanel({
       };
 
       Voice.onSpeechResults = (e) => {
+        if (
+          voiceInputSuppressedRef.current ||
+          isProcessingRef.current ||
+          isTtsPlayingRef.current
+        ) return;
         if (e.value && e.value[0]) {
           setLiveText(e.value[0]);
           liveTextRef.current = e.value[0];
@@ -558,6 +591,11 @@ export default function ConversationPanel({
       };
 
       Voice.onSpeechPartialResults = (e) => {
+        if (
+          voiceInputSuppressedRef.current ||
+          isProcessingRef.current ||
+          isTtsPlayingRef.current
+        ) return;
         if (e.value && e.value[0]) {
           setLiveText(e.value[0]);
           liveTextRef.current = e.value[0];
@@ -617,6 +655,8 @@ export default function ConversationPanel({
       await Voice.start(speechLocale, recognitionOptions);
     } catch (err) {
       console.error('Failed to start recording loop:', err);
+      await stopPersistentSpeechAudioRecording();
+      await stopBackgroundService();
       setIsManualRecording(false);
       setActiveManualLang(null);
       isRecordingRef.current = false;
@@ -627,6 +667,7 @@ export default function ConversationPanel({
     const {
       detectedLangOverride,
       shouldResumeContinuous,
+      keepVoiceSession = false,
       requestId = null,
       speechEndedAt = null,
     } = options;
@@ -743,19 +784,26 @@ export default function ConversationPanel({
           speed: speedRef.current,
           onPlaybackFinished: () => {
             isTtsPlayingRef.current = false;
-            if (shouldResumeContinuous) {
+            if (keepVoiceSession) {
+              resumeKeptVoiceSession(langType);
+            } else if (shouldResumeContinuous) {
               triggerContinuousMicRestart(langType);
             }
           }
         });
       } else {
         isTtsPlayingRef.current = false;
-        if (shouldResumeContinuous) {
+        if (keepVoiceSession) {
+          resumeKeptVoiceSession(langType, 150);
+        } else if (shouldResumeContinuous) {
           triggerContinuousMicRestart(langType);
         }
       }
     } catch (e) {
       console.warn('Voice translation failed:', e);
+      if (keepVoiceSession) {
+        resumeKeptVoiceSession(langType, 150);
+      }
     } finally {
       setIsProcessing(false);
       isProcessingRef.current = false;
@@ -772,6 +820,11 @@ export default function ConversationPanel({
       micModeRef.current === 'continuous' &&
       options.resumeContinuous !== false &&
       (!autoDetect || langType !== 'auto' || autoListeningWantedRef.current);
+    const keepVoiceSession =
+      Platform.OS === 'android' &&
+      shouldResumeContinuous &&
+      !autoDetectRef.current &&
+      langType !== 'auto';
     const stopDelayMs = options.stopDelayMs || 0;
     const speechEndedAt = options.speechEndedAt || audioLastSpeechAtRef.current || null;
     const requestId = autoDetect && langType === 'auto'
@@ -785,7 +838,11 @@ export default function ConversationPanel({
 
     if (!isRecordingRef.current) return;
     const isAzureAutoCapture = autoDetectRef.current && langType === 'auto' && audioRecordingRef.current;
-    isRecordingRef.current = false;
+    if (!keepVoiceSession) {
+      isRecordingRef.current = false;
+    } else {
+      voiceInputSuppressedRef.current = true;
+    }
     setIsSpeechActive(false);
     
     // Continuous mode only resumes after silence-triggered translation, not after manual stop.
@@ -796,7 +853,6 @@ export default function ConversationPanel({
       activeManualLangRef.current = null;
       isManualRecordingRef.current = false;
       setIsManualRecording(false);
-      await stopBackgroundService();
     }
 
     try {
@@ -807,6 +863,10 @@ export default function ConversationPanel({
       if (isAzureAutoCapture) {
         const captureStopStartedAt = Date.now();
         const audioUri = await stopAzureAutoRecording();
+        if (!shouldResumeContinuous) {
+          await stopPersistentSpeechAudioRecording();
+          await stopBackgroundService();
+        }
         const captureStoppedAt = Date.now();
         setLiveText('');
         liveTextRef.current = '';
@@ -894,10 +954,30 @@ export default function ConversationPanel({
         return;
       }
 
+      if (keepVoiceSession) {
+        const textToTranslate = liveTextRef.current;
+        setLiveText('');
+        liveTextRef.current = '';
+
+        if (textToTranslate && textToTranslate.trim()) {
+          await translateRecognizedText(textToTranslate, langType, {
+            shouldResumeContinuous,
+            keepVoiceSession: true,
+          });
+        } else {
+          voiceInputSuppressedRef.current = false;
+          setIsSpeechActive(true);
+        }
+        return;
+      }
+
       await Voice.stop();
       try {
         await Voice.destroy();
       } catch (e) {}
+      if (!shouldResumeContinuous) {
+        await stopBackgroundService();
+      }
 
       // Wait briefly for Voice events to settle
       const runSettleAndTranslate = async () => {
@@ -939,6 +1019,11 @@ export default function ConversationPanel({
       }
     } catch (err) {
       console.error('Failed to stop Voice recording', err);
+      voiceInputSuppressedRef.current = false;
+      if (!shouldResumeContinuous) {
+        await stopPersistentSpeechAudioRecording();
+        await stopBackgroundService();
+      }
       setIsManualRecording(false);
       setActiveManualLang(null);
       isRecordingRef.current = false;

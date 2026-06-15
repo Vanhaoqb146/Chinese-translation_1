@@ -153,11 +153,28 @@ class VoiceCompatibilityAdapter {
     }
 
     this._ensureListeners();
+
+    // Query available speech services on Android to force Google Speech Services if installed
+    let androidRecognitionServicePackage = undefined;
+    if (Platform.OS === 'android') {
+      try {
+        const services = typeof recognitionModule.getSpeechRecognitionServices === 'function'
+          ? recognitionModule.getSpeechRecognitionServices()
+          : [];
+        if (services.includes('com.google.android.googlequicksearchbox')) {
+          androidRecognitionServicePackage = 'com.google.android.googlequicksearchbox';
+        }
+      } catch (e) {
+        console.warn('[speechRecognition] Failed to check speech recognition services:', e);
+      }
+    }
+
     const androidIntentOptions = getCompatibleAndroidIntentOptions({
       EXTRA_LANGUAGE_MODEL: languageModelFreeForm,
       EXTRA_PARTIAL_RESULTS: true,
       EXTRA_MAX_RESULTS: options.EXTRA_MAX_RESULTS || 5,
       EXTRA_MASK_OFFENSIVE_WORDS: false,
+      EXTRA_LANGUAGE: locale,
       ...(options.androidIntentOptions || {}),
     });
     const androidApiLevel = getAndroidApiLevel();
@@ -168,11 +185,12 @@ class VoiceCompatibilityAdapter {
     if (Platform.OS === 'android' && options.continuous) {
       console.log(
         `[speechRecognition] live input locale=${locale} api=${androidApiLevel ?? 'unknown'} ` +
-        `path=${androidLiveAec ? 'voice-communication-aec' : 'standard-recognizer'}`
+        `path=${androidLiveAec ? 'voice-communication-aec' : 'standard-recognizer'} ` +
+        `service=${androidRecognitionServicePackage || 'default'}`
       );
     }
 
-    recognitionModule.start({
+    const startOptions = {
       lang: locale,
       interimResults: true,
       maxAlternatives: options.EXTRA_MAX_RESULTS || 5,
@@ -180,7 +198,13 @@ class VoiceCompatibilityAdapter {
       requiresOnDeviceRecognition: false,
       androidIntentOptions,
       ...(Platform.OS === 'android' ? { androidLiveAec } : {}),
-    });
+    };
+
+    if (Platform.OS === 'android' && androidRecognitionServicePackage) {
+      startOptions.androidRecognitionServicePackage = androidRecognitionServicePackage;
+    }
+
+    recognitionModule.start(startOptions);
   }
 
   async stop() {

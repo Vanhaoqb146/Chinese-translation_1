@@ -23,6 +23,7 @@ import {
   isSpeechMeteringActive,
   startSpeechAudioRecording,
   stopSpeechAudioRecording,
+  stopPersistentSpeechAudioRecording,
   startBackgroundService,
   stopBackgroundService,
 } from '../services/speechAudioRecorder';
@@ -297,7 +298,9 @@ export default function SimultaneousPanel({
   const recordingDuringTtsRef = useRef(false);
   const recordingTtsLangRef = useRef(null);
   const manualRecognitionConfidenceRef = useRef(null);
+  const manualCaptureSuppressedRef = useRef(false);
   const recordingUsesAndroidAecRef = useRef(false);
+  const lastSentPersistentTextRef = useRef('');
 
   const providerRef = useRef(provider);
   const speedRef = useRef(speed);
@@ -440,6 +443,26 @@ export default function SimultaneousPanel({
     liveTextRef.current = '';
   };
 
+  const resumeManualCaptureAfterTts = (delayMs = 400) => {
+    const resume = () => {
+      manualCaptureSuppressedRef.current = false;
+      if (isRecordingRef.current) {
+        setIsSpeechActive(true);
+      }
+    };
+
+    if (Platform.OS === 'android' && AndroidAecRecorder) {
+      AndroidAecRecorder.cancelBackgroundTimer()
+        .then(() => AndroidAecRecorder.startBackgroundTimer(delayMs))
+        .then((fired) => {
+          if (fired) resume();
+        })
+        .catch(resume);
+    } else {
+      setTimeout(resume, delayMs);
+    }
+  };
+
   const cleanupRecording = async () => {
     try {
       clearSilenceTimer();
@@ -453,6 +476,7 @@ export default function SimultaneousPanel({
       await Voice.stop();
       await Voice.destroy();
     } catch (e) {}
+    await stopPersistentSpeechAudioRecording();
   };
 
   const getFallbackLangType = () => (
@@ -543,9 +567,11 @@ export default function SimultaneousPanel({
     translationQueueRef.current = [];
     setQueueLength(0);
     lastQueuedTextRef.current = '';
+    lastSentPersistentTextRef.current = '';
     lastRobotSpokenTextRef.current = '';
     recentRobotSpeechRef.current = [];
     recordingUsesAndroidAecRef.current = false;
+    manualCaptureSuppressedRef.current = false;
     ttsSessionRef.current += 1;
     activeTtsLangRef.current = null;
     isProcessingQueueRef.current = false;
@@ -569,9 +595,11 @@ export default function SimultaneousPanel({
     translationQueueRef.current = [];
     setQueueLength(0);
     lastQueuedTextRef.current = '';
+    lastSentPersistentTextRef.current = '';
     lastRobotSpokenTextRef.current = '';
     recentRobotSpeechRef.current = [];
     recordingUsesAndroidAecRef.current = false;
+    manualCaptureSuppressedRef.current = false;
     isProcessingQueueRef.current = false;
     ttsSessionRef.current += 1;
     activeTtsLangRef.current = null;
@@ -597,6 +625,11 @@ export default function SimultaneousPanel({
   const handleSpeechValue = (event, langType) => {
     const transcript = event?.value?.[0];
     if (!transcript || !isActiveRef.current) return;
+    if (
+      manualCaptureSuppressedRef.current ||
+      (!overlapListeningRef.current &&
+        (isProcessingQueueRef.current || isTtsPlayingRef.current))
+    ) return;
 
     const confidence = Number(event?.confidence);
     if (Number.isFinite(confidence) && confidence >= 0) {
@@ -657,8 +690,13 @@ export default function SimultaneousPanel({
       ) {
         stopRecognitionAndQueue(langType);
       }
-    }, { preferAndroidAec });
-    recordingUsesAndroidAecRef.current = Boolean(recording?.__androidAec);
+    }, {
+      preferAndroidAec,
+      persistentAndroid: true,
+    });
+    recordingUsesAndroidAecRef.current = Boolean(
+      recording?.__androidAec || recording?.startResult?.aecEnabled
+    );
     if (preferAndroidAec) {
       logPerformance(`sim-${captureSession}-aec`, 'android_aec_capture_selected', {
         captureId,
@@ -813,6 +851,7 @@ export default function SimultaneousPanel({
       Voice.onRecognitionEnd = () => {
         setIsSpeechActive(false);
         isRecordingRef.current = false;
+        lastSentPersistentTextRef.current = '';
 
         if (
           isActiveRef.current &&
@@ -869,6 +908,8 @@ export default function SimultaneousPanel({
       setStatusText(langType === 'auto' ? 'Live Auto đang nghe...' : `Đang nghe ${inputLang.name}...`);
     } catch (error) {
       console.error('Simultaneous setup failed:', error);
+      await stopPersistentSpeechAudioRecording();
+      await stopBackgroundService();
       isRecordingRef.current = false;
       setIsSpeechActive(false);
       setIsActive(false);
@@ -909,7 +950,9 @@ export default function SimultaneousPanel({
 
   const shouldDropCandidate = (text, trace = {}) => {
     const normalized = normalizeForComparison(text);
-    if (!normalized || normalized.length <= 1) return true;
+    const isCJK = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(normalized);
+    const minLength = isCJK ? 1 : 2;
+    if (!normalized || normalized.length < minLength) return true;
     if (SHORT_FILLERS.has(normalized)) return true;
 
     const previousQueued = lastQueuedTextRef.current;
@@ -1136,8 +1179,16 @@ export default function SimultaneousPanel({
 
     const captureSession = captureSessionRef.current;
     const isAzureAutoCapture = autoDetectRef.current && langType === 'auto' && audioRecordingRef.current;
+    const keepVoiceSession =
+      Platform.OS === 'android' &&
+      !autoDetectRef.current &&
+      isActiveRef.current;
     let restartScheduled = false;
-    isRecordingRef.current = false;
+    if (!keepVoiceSession) {
+      isRecordingRef.current = false;
+    } else if (!overlapListeningRef.current) {
+      manualCaptureSuppressedRef.current = true;
+    }
     setIsSpeechActive(false);
 
     try {
@@ -1237,6 +1288,72 @@ export default function SimultaneousPanel({
         return;
       }
 
+      if (keepVoiceSession) {
+        const fullAccumulatedText = liveTextRef.current;
+        resetLiveText();
+
+        // Google STT in persistent session accumulates ALL text from session start.
+        // Extract only the NEW portion that hasn't been translated yet.
+        let textToTranslate = fullAccumulatedText;
+        const prevSent = lastSentPersistentTextRef.current;
+        if (prevSent && fullAccumulatedText.startsWith(prevSent)) {
+          textToTranslate = fullAccumulatedText.slice(prevSent.length).trim();
+        }
+        // Update the prefix tracker to the full accumulated text
+        lastSentPersistentTextRef.current = fullAccumulatedText;
+
+        // Drop low-confidence captures during TTS on speaker (no headphones).
+        // Android AEC aggressively dampens mic during speaker playback, producing
+        // garbage fragments (e.g. "听") with confidence=0 that are echo artifacts.
+        const confidence = manualRecognitionConfidenceRef.current;
+        const isDuringTtsSpeaker =
+          recordingDuringTtsRef.current &&
+          !useHeadphonesRef.current &&
+          overlapListeningRef.current;
+        if (
+          isDuringTtsSpeaker &&
+          (confidence === null || confidence === undefined || confidence < 0.3)
+        ) {
+          const requestId = `sim-${Date.now().toString(36)}`;
+          logPerformance(requestId, 'manual_stt_dropped_low_confidence', {
+            langType,
+            text: textToTranslate,
+            fullAccumulated: fullAccumulatedText.length,
+            confidence,
+            recordedDuringTts: true,
+            ttsLang: recordingTtsLangRef.current,
+          });
+          manualCaptureSuppressedRef.current = false;
+          setIsSpeechActive(true);
+          return;
+        }
+
+        const requestId = `sim-${Date.now().toString(36)}`;
+        logPerformance(requestId, 'manual_stt_final', {
+          langType,
+          text: textToTranslate,
+          fullAccumulated: fullAccumulatedText.length,
+          deltaExtracted: textToTranslate !== fullAccumulatedText,
+          textLength: (textToTranslate || '').trim().length,
+          recordedDuringTts: recordingDuringTtsRef.current,
+          ttsLang: recordingTtsLangRef.current,
+          confidence: manualRecognitionConfidenceRef.current,
+          persistentSession: true,
+        });
+        const hasQueued = enqueueTranslationTask(textToTranslate, langType, null, {
+          requestId,
+          recordedDuringTts: recordingDuringTtsRef.current,
+          ttsLang: recordingTtsLangRef.current,
+          provider: 'android-speech',
+          confidence: manualRecognitionConfidenceRef.current,
+        });
+        if (!hasQueued) {
+          manualCaptureSuppressedRef.current = false;
+          setIsSpeechActive(true);
+        }
+        return;
+      }
+
       await Voice.stop();
       try {
         await Voice.destroy();
@@ -1287,6 +1404,7 @@ export default function SimultaneousPanel({
         captureSessionRef.current === captureSession &&
         isActiveRef.current &&
         overlapListeningRef.current &&
+        !keepVoiceSession &&
         !restartScheduled
       ) {
         const triggerRestart = () => {
@@ -1308,6 +1426,7 @@ export default function SimultaneousPanel({
         !stoppingRef.current &&
         captureSessionRef.current === captureSession &&
         isActiveRef.current &&
+        !keepVoiceSession &&
         !isTtsPlayingRef.current &&
         translationQueueRef.current.length === 0
       ) {
@@ -1401,9 +1520,31 @@ export default function SimultaneousPanel({
             fromLang: task.fromLang,
             toLang: task.toLang,
             time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+            timestamp: Date.now(),
           };
 
           setChatLog((prev) => {
+            if (prev.length > 0) {
+              const last = prev[prev.length - 1];
+              const isSameSpeaker = last.isUser === newEntry.isUser;
+              const isRecent = last.timestamp && (Date.now() - last.timestamp) < 15000;
+              
+              const cleanLast = last.sourceText.trim().toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
+              const cleanNew = newEntry.sourceText.trim().toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
+              const isPrefix = cleanNew.startsWith(cleanLast) || cleanLast.startsWith(cleanNew);
+
+              if (isSameSpeaker && isRecent && isPrefix) {
+                const next = [...prev.slice(0, -1), {
+                  ...last,
+                  sourceText: newEntry.sourceText,
+                  translatedText: newEntry.translatedText,
+                  time: newEntry.time,
+                  timestamp: newEntry.timestamp,
+                }];
+                chatLogRef.current = next;
+                return next;
+              }
+            }
             const next = [...prev, newEntry];
             chatLogRef.current = next;
             return next;
@@ -1439,7 +1580,10 @@ export default function SimultaneousPanel({
             ttsSessionRef.current += 1;
             activeTtsLangRef.current = task.toLang;
             if (!overlapListeningRef.current) {
-              await cleanupRecording();
+              manualCaptureSuppressedRef.current = true;
+              if (Platform.OS !== 'android') {
+                await cleanupRecording();
+              }
             }
             await playSimultaneousTts(
               translation,
@@ -1467,15 +1611,28 @@ export default function SimultaneousPanel({
       isProcessingQueueRef.current = false;
       setIsProcessing(false);
       if (isActiveRef.current) {
+        if (
+          Platform.OS === 'android' &&
+          !autoDetectRef.current &&
+          !overlapListeningRef.current
+        ) {
+          resumeManualCaptureAfterTts();
+        } else {
+          manualCaptureSuppressedRef.current = false;
+        }
         setStatusText(activeInputLangRef.current === 'auto' ? 'Live Auto đang nghe...' : 'Mic đang nghe...');
-        if (!overlapListeningRef.current && !isRecordingRef.current && !isTtsPlayingRef.current) {
+        if (
+          !isRecordingRef.current &&
+          !isTtsPlayingRef.current &&
+          (Platform.OS === 'android' || !overlapListeningRef.current)
+        ) {
           const restartDelay = useHeadphonesRef.current
             ? MIC_RESTART_AFTER_TTS_HEADPHONES_MS
             : MIC_RESTART_AFTER_TTS_SPEAKER_MS;
           const triggerRestart = () => {
             if (
               isActiveRef.current &&
-              !overlapListeningRef.current &&
+              (Platform.OS === 'android' || !overlapListeningRef.current) &&
               !isRecordingRef.current &&
               !isTtsPlayingRef.current
             ) {
@@ -2180,6 +2337,7 @@ const getStyles = (colors) => StyleSheet.create({
   },
   bubbleCard: {
     maxWidth: '88%',
+    minWidth: 120,
     borderRadius: 18,
     paddingVertical: 12,
     paddingHorizontal: 15,

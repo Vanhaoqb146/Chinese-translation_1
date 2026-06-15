@@ -40,6 +40,9 @@ const androidAecRecorderEvents = AndroidAecRecorder
   ? new NativeEventEmitter(AndroidAecRecorder)
   : null;
 let androidAecAvailabilityPromise = null;
+let persistentAndroidSession = null;
+let persistentAndroidStatusHandler = null;
+let persistentAndroidSubscription = null;
 
 export async function startBackgroundService(title, body) {
   if (Platform.OS === 'android' && AndroidAecRecorder) {
@@ -150,6 +153,7 @@ async function startAndroidAecRecording(onStatusUpdate) {
     const startResult = await AndroidAecRecorder.start({
       sampleRate: 16000,
       statusIntervalMs: SPEECH_RECORDING_INTERVAL_MS,
+      enableAec: true,
     });
 
     console.log(
@@ -166,6 +170,107 @@ async function startAndroidAecRecording(onStatusUpdate) {
     subscription?.remove?.();
     console.warn('[AndroidAecRecorder] Failed to start, falling back to Expo recorder:', error);
     return null;
+  }
+}
+
+function ensurePersistentAndroidSubscription() {
+  if (persistentAndroidSubscription || !androidAecRecorderEvents) return;
+
+  persistentAndroidSubscription = androidAecRecorderEvents.addListener(
+    'AndroidAecRecorderStatus',
+    (status) => {
+      if (!status?.segmentActive) return;
+      persistentAndroidStatusHandler?.({
+        ...status,
+        isRecording: true,
+        androidPersistent: true,
+      });
+    }
+  );
+}
+
+async function startPersistentAndroidRecording(onStatusUpdate, enableAec) {
+  const requiredMethods = [
+    'startPersistent',
+    'beginPersistentSegment',
+    'finishPersistentSegment',
+    'stopPersistent',
+  ];
+  const missingMethods = requiredMethods.filter(
+    (method) => typeof AndroidAecRecorder?.[method] !== 'function'
+  );
+  if (missingMethods.length > 0) {
+    throw new Error(
+      `Background microphone native API is outdated (${missingMethods.join(', ')} missing). ` +
+      'Rebuild and reinstall the Android app.'
+    );
+  }
+
+  const availability = await getAndroidAecRecorderAvailability();
+  if (!availability?.available) {
+    throw new Error('The native Android background microphone is unavailable on this device.');
+  }
+
+  ensurePersistentAndroidSubscription();
+  persistentAndroidStatusHandler = onStatusUpdate || null;
+
+  try {
+    let startResult;
+    if (persistentAndroidSession) {
+      startResult = await AndroidAecRecorder.beginPersistentSegment();
+    } else {
+      startResult = await AndroidAecRecorder.startPersistent({
+        sampleRate: 16000,
+        statusIntervalMs: SPEECH_RECORDING_INTERVAL_MS,
+        enableAec: Boolean(enableAec),
+      });
+      persistentAndroidSession = {
+        enableAec: Boolean(enableAec),
+        startResult,
+      };
+    }
+
+    console.log(
+      `[persistent recorder] Segment started ` +
+      `aec=${startResult?.aecEnabled} ns=${startResult?.noiseSuppressorEnabled} ` +
+      `agc=${startResult?.agcEnabled}`
+    );
+    return {
+      __androidPersistent: true,
+      startResult,
+    };
+  } catch (error) {
+    persistentAndroidStatusHandler = null;
+    console.warn('[AndroidAecRecorder] Persistent segment failed:', error);
+    throw error;
+  }
+}
+
+async function finishPersistentAndroidSegment() {
+  persistentAndroidStatusHandler = null;
+  const stopResult = await AndroidAecRecorder.finishPersistentSegment();
+  const uri = await verifySpeechAudioFile(stopResult?.uri);
+  if (uri) {
+    console.log(
+      `[persistent recorder] Segment finished: ` +
+      `${((stopResult?.sizeBytes || 0) / 1024).toFixed(1)}KB  uri=${uri.slice(-60)}`
+    );
+  }
+  return uri;
+}
+
+export async function stopPersistentSpeechAudioRecording() {
+  if (!persistentAndroidSession || !AndroidAecRecorder) return;
+
+  persistentAndroidStatusHandler = null;
+  try {
+    await AndroidAecRecorder.stopPersistent();
+  } catch (error) {
+    console.warn('[AndroidAecRecorder] Failed to stop persistent microphone:', error);
+  } finally {
+    persistentAndroidSession = null;
+    persistentAndroidSubscription?.remove?.();
+    persistentAndroidSubscription = null;
   }
 }
 
@@ -187,6 +292,9 @@ async function stopAndroidAecRecording(recording) {
 
 async function stopRecordingNow(recording) {
   if (!recording) return null;
+  if (recording.__androidPersistent) {
+    return finishPersistentAndroidSegment();
+  }
   if (recording.__androidAec) {
     return stopAndroidAecRecording(recording);
   }
@@ -215,6 +323,17 @@ export async function startSpeechAudioRecording(onStatusUpdate, options = {}) {
       activeRecording = null;
       await stopRecordingNow(previousRecording);
       await delay(120);
+    }
+
+    if (options?.persistentAndroid && Platform.OS === 'android') {
+      const persistentRecording = await startPersistentAndroidRecording(
+        onStatusUpdate,
+        Boolean(options?.preferAndroidAec)
+      );
+      activeRecording = persistentRecording;
+      return persistentRecording;
+    } else if (persistentAndroidSession) {
+      await stopPersistentSpeechAudioRecording();
     }
 
     if (options?.preferAndroidAec) {

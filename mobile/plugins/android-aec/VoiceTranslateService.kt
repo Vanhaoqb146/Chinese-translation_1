@@ -3,21 +3,28 @@ package __ANDROID_AEC_PACKAGE__
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import com.facebook.react.HeadlessJsTaskService
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.jstasks.HeadlessJsTaskConfig
 
-class VoiceTranslateService : Service() {
+class VoiceTranslateService : HeadlessJsTaskService() {
     companion object {
         const val CHANNEL_ID = "VoiceTranslate_Background_Channel"
         const val NOTIFICATION_ID = 9925
+        const val HEADLESS_TASK_KEY = "VoiceTranslateKeepAlive"
+
+        @Volatile
+        var isRunning: Boolean = false
+            private set
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private var headlessTaskStarted = false
 
     override fun onCreate() {
         super.onCreate()
@@ -47,15 +54,29 @@ class VoiceTranslateService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         }
 
+        isRunning = true
+        if (!headlessTaskStarted) {
+            headlessTaskStarted = true
+            super.onStartCommand(intent, flags, startId)
+        }
+
         return START_STICKY
     }
 
+    override fun getTaskConfig(intent: Intent?): HeadlessJsTaskConfig =
+        HeadlessJsTaskConfig(
+            HEADLESS_TASK_KEY,
+            Arguments.createMap(),
+            0L,
+            true
+        )
+
     override fun onDestroy() {
+        isRunning = false
+        AndroidAecRecorderModule.stopActiveRecorderFromService()
         releaseWakeLock()
         super.onDestroy()
     }
-
-    override fun onBind(intent: Intent?): IBinder? = null
 
     private fun acquireWakeLock() {
         try {
