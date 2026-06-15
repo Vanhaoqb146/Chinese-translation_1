@@ -204,7 +204,7 @@ export default function useSimultaneousConversation({
     if (currentAudioRef.current && isProcessingQueueRef.current) {
       let targetVolume = 1.0;
       if (overlapListeningRef.current) {
-        targetVolume = useHeadphonesRef.current ? 0.80 : 0.40;
+        targetVolume = useHeadphonesRef.current ? 0.70 : 0.15;
       }
       console.log(`🔈 [Audio Ducking] Giảm âm lượng robot phát loa xuống ${targetVolume * 100}% vì phát hiện người dùng đang nói`);
       currentAudioRef.current.volume = targetVolume;
@@ -314,6 +314,12 @@ export default function useSimultaneousConversation({
       const transcript = e.result.text;
       if (!transcript) return;
 
+      // Echo cancellation: Bỏ qua toàn bộ âm thanh khi robot đang phát loa ngoài (không tai nghe)
+      if (activeTtsLangRef.current && !useHeadphonesRef.current) {
+        console.log(`🛡️ [AEC Echo Guard] Bỏ qua interim vì robot đang phát loa (${activeTtsLangRef.current}) và không dùng tai nghe`);
+        return;
+      }
+
       if (autoDetectRef.current) {
         try {
           const detectedLocale = e.result.properties?.getProperty?.(
@@ -321,26 +327,13 @@ export default function useSimultaneousConversation({
           );
           if (detectedLocale && detectedLocale !== 'Unknown') {
             const baseLang = detectedLocale.split('-')[0];
-            if (activeTtsLangRef.current === baseLang && !useHeadphonesRef.current) {
-              console.log(`🛡️ [Azure AEC Echo] Bỏ qua TOÀN BỘ event vì phát hiện tiếng loa dội ngược (${baseLang})`);
-              return; // Bỏ qua hoàn toàn - chống loa ngoài thu tiếng robot
-            } else if (baseLang !== inputLangRef.current) {
+            if (baseLang !== inputLangRef.current) {
               console.log(`🌐 [Auto-detect interim] ${inputLangRef.current} → ${baseLang}`);
               inputLangRef.current = baseLang;
               setActiveLang(baseLang);
             }
           }
         } catch (e) { console.warn('⚠️ [Auto-detect interim]', e); }
-
-        // Fallback: Nếu Azure không nhận diện được ngôn ngữ (Unknown/null), dùng text-based detection
-        // Để chặn echo loa ngoài (VD: loa phát tiếng Trung, mic thu lại thành CJK rác)
-        if (activeTtsLangRef.current && !useHeadphonesRef.current) {
-          const echoTextLang = detectLangFromText(transcript, srcLangCodeRef.current, tgtLangCodeRef.current);
-          if (echoTextLang === activeTtsLangRef.current) {
-            console.log(`🛡️ [Text AEC Echo] Bỏ qua interim vì nội dung "${transcript.slice(0, 20)}..." là ${echoTextLang}, trùng ngôn ngữ robot đang phát`);
-            return;
-          }
-        }
       }
 
       if (isProcessingQueueRef.current) {
@@ -362,6 +355,12 @@ export default function useSimultaneousConversation({
       const transcript = e.result.text;
       if (!transcript) return;
 
+      // Echo cancellation: Bỏ qua toàn bộ âm thanh khi robot đang phát loa ngoài (không tai nghe)
+      if (activeTtsLangRef.current && !useHeadphonesRef.current) {
+        console.log(`🛡️ [AEC Echo Guard] Bỏ qua FINAL vì robot đang phát loa (${activeTtsLangRef.current}) và không dùng tai nghe`);
+        return;
+      }
+
       if (autoDetectRef.current) {
         try {
           const detectedLocale = e.result.properties?.getProperty?.(
@@ -369,25 +368,13 @@ export default function useSimultaneousConversation({
           );
           if (detectedLocale && detectedLocale !== 'Unknown') {
             const baseLang = detectedLocale.split('-')[0];
-            if (activeTtsLangRef.current === baseLang && !useHeadphonesRef.current) {
-              console.log(`🛡️ [Azure AEC Echo] Bỏ qua TOÀN BỘ FINAL event vì phát hiện tiếng loa dội ngược (${baseLang})`);
-              return; // Bỏ qua hoàn toàn - chống loa ngoài thu tiếng robot
-            } else if (baseLang !== inputLangRef.current) {
+            if (baseLang !== inputLangRef.current) {
               console.log(`🌐 [Auto-detect FINAL] ${inputLangRef.current} → ${baseLang}`);
               inputLangRef.current = baseLang;
               setActiveLang(baseLang);
             }
           }
         } catch (e) { console.warn('⚠️ [Auto-detect final]', e); }
-
-        // Fallback: Nếu Azure không nhận diện được ngôn ngữ (Unknown/null), dùng text-based detection
-        if (activeTtsLangRef.current && !useHeadphonesRef.current) {
-          const echoTextLang = detectLangFromText(transcript, srcLangCodeRef.current, tgtLangCodeRef.current);
-          if (echoTextLang === activeTtsLangRef.current) {
-            console.log(`🛡️ [Text AEC Echo] Bỏ qua FINAL vì nội dung "${transcript.slice(0, 20)}..." là ${echoTextLang}, trùng ngôn ngữ robot đang phát`);
-            return;
-          }
-        }
       }
 
       // Check duplicate with last queued text
@@ -703,6 +690,18 @@ export default function useSimultaneousConversation({
     text = text.replace(/(?<=^|\s|[.,!?])(ừm|ờ|à|ơi|ơ)(?=\s|[.,!?]|$)/gi, '');
     text = text.replace(/\b(uh|um|er|erm)\b/gi, '');
     if (!text) return;
+
+    // Chống tiếng click/nhiễu cực ngắn bằng tiếng Trung (ví dụ: "电", "个", "的", "啊"...)
+    if (inputLangRef.current === 'zh') {
+      const cleanZh = text.replace(/[。，！？、：；.,\/#!$%\^&\*;:{}=\-_`~()?]/g, '').trim();
+      if (cleanZh.length <= 1) {
+        console.log(`🛡️ [ZH Noise Filter] Bỏ qua nhiễu tiếng Trung cực ngắn (1 ký tự): "${text}"`);
+        accumulatedTextRef.current = '';
+        currentInterimRef.current = '';
+        if (onInterimTextRef.current) onInterimTextRef.current('');
+        return;
+      }
+    }
 
     // Bộ lọc chống tạp âm click/nhiễu cực ngắn (Dạ, À, Ừ...) xuất hiện khi loa đang phát âm (TTS)
     if (overlapListeningRef.current && isProcessingQueueRef.current) {
