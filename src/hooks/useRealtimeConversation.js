@@ -185,9 +185,16 @@ export default function useRealtimeConversation({
       const candidates = [...new Set([srcLocale, tgtLocale])];
       console.log(`🌐 [Azure STT] Auto-detect candidates: ${candidates.join(', ')}`);
 
+      // Khởi tạo SpeechConfig từ Universal v2 endpoint chuyên dụng cho LID
+      const endpoint = `wss://${tokenData.region}.stt.speech.microsoft.com/speech/universal/v2`;
+      const v2Config = sdk.SpeechConfig.fromEndpoint(new URL(endpoint), "");
+      v2Config.authorizationToken = tokenData.token;
+      v2Config.setProperty('Speech_SegmentationSilenceTimeoutMs', '2000');
+      v2Config.setProperty('SpeechServiceConnection_LanguageIdMode', 'Continuous');
+
       const autoDetectConfig = sdk.AutoDetectSourceLanguageConfig.fromLanguages(candidates);
       audioConfig = sdk.AudioConfig.fromDefaultMicrophoneInput();
-      recognizer = sdk.SpeechRecognizer.FromConfig(speechConfig, autoDetectConfig, audioConfig);
+      recognizer = sdk.SpeechRecognizer.FromConfig(v2Config, autoDetectConfig, audioConfig);
     } else {
       speechConfig.speechRecognitionLanguage = primaryLang;
       console.log(`🌐 [Azure STT] language=${primaryLang}`);
