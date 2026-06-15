@@ -290,6 +290,9 @@ export default function useSimultaneousConversation({
       const candidates = [...new Set([srcLocale, tgtLocale])];
       console.log(`🌐 [Azure STT] Candidates: ${candidates.join(', ')}`);
 
+      // Kích hoạt Continuous Language Identification
+      speechConfig.setProperty('SpeechServiceConnection_LanguageIdMode', 'Continuous');
+
       const autoDetectConfig = sdk.AutoDetectSourceLanguageConfig.fromLanguages(candidates);
       audioConfig = stream 
         ? sdk.AudioConfig.fromStreamInput(stream)
@@ -318,7 +321,7 @@ export default function useSimultaneousConversation({
           );
           if (detectedLocale && detectedLocale !== 'Unknown') {
             const baseLang = detectedLocale.split('-')[0];
-            if (activeTtsLangRef.current === baseLang) {
+            if (activeTtsLangRef.current === baseLang && !useHeadphonesRef.current) {
               console.log(`🛡️ [Azure AEC Echo] Bỏ qua TOÀN BỘ event vì phát hiện tiếng loa dội ngược (${baseLang})`);
               return; // Bỏ qua hoàn toàn - chống loa ngoài thu tiếng robot
             } else if (baseLang !== inputLangRef.current) {
@@ -331,7 +334,7 @@ export default function useSimultaneousConversation({
 
         // Fallback: Nếu Azure không nhận diện được ngôn ngữ (Unknown/null), dùng text-based detection
         // Để chặn echo loa ngoài (VD: loa phát tiếng Trung, mic thu lại thành CJK rác)
-        if (activeTtsLangRef.current) {
+        if (activeTtsLangRef.current && !useHeadphonesRef.current) {
           const echoTextLang = detectLangFromText(transcript, srcLangCodeRef.current, tgtLangCodeRef.current);
           if (echoTextLang === activeTtsLangRef.current) {
             console.log(`🛡️ [Text AEC Echo] Bỏ qua interim vì nội dung "${transcript.slice(0, 20)}..." là ${echoTextLang}, trùng ngôn ngữ robot đang phát`);
@@ -366,7 +369,7 @@ export default function useSimultaneousConversation({
           );
           if (detectedLocale && detectedLocale !== 'Unknown') {
             const baseLang = detectedLocale.split('-')[0];
-            if (activeTtsLangRef.current === baseLang) {
+            if (activeTtsLangRef.current === baseLang && !useHeadphonesRef.current) {
               console.log(`🛡️ [Azure AEC Echo] Bỏ qua TOÀN BỘ FINAL event vì phát hiện tiếng loa dội ngược (${baseLang})`);
               return; // Bỏ qua hoàn toàn - chống loa ngoài thu tiếng robot
             } else if (baseLang !== inputLangRef.current) {
@@ -378,12 +381,22 @@ export default function useSimultaneousConversation({
         } catch (e) { console.warn('⚠️ [Auto-detect final]', e); }
 
         // Fallback: Nếu Azure không nhận diện được ngôn ngữ (Unknown/null), dùng text-based detection
-        if (activeTtsLangRef.current) {
+        if (activeTtsLangRef.current && !useHeadphonesRef.current) {
           const echoTextLang = detectLangFromText(transcript, srcLangCodeRef.current, tgtLangCodeRef.current);
           if (echoTextLang === activeTtsLangRef.current) {
             console.log(`🛡️ [Text AEC Echo] Bỏ qua FINAL vì nội dung "${transcript.slice(0, 20)}..." là ${echoTextLang}, trùng ngôn ngữ robot đang phát`);
             return;
           }
+        }
+      }
+
+      // Check duplicate with last queued text
+      if (lastQueuedTextRef.current) {
+        const similarity = getSimilarityRatio(transcript, lastQueuedTextRef.current);
+        if (similarity > 0.85) {
+          console.log(`🛡️ [Azure Recognized Guard] Bỏ qua FINAL vì tương đồng cao với câu đã queued (${(similarity * 100).toFixed(1)}%): "${transcript}" vs "${lastQueuedTextRef.current}"`);
+          currentInterimRef.current = '';
+          return;
         }
       }
 
@@ -517,6 +530,16 @@ export default function useSimultaneousConversation({
         if (messageType === 'committed_transcript') {
           const transcript = data.text || '';
           if (!transcript) return;
+
+          // Check duplicate with last queued text
+          if (lastQueuedTextRef.current) {
+            const similarity = getSimilarityRatio(transcript, lastQueuedTextRef.current);
+            if (similarity > 0.85) {
+              console.log(`🛡️ [ElevenLabs Committed Guard] Bỏ qua committed vì tương đồng cao với câu đã queued (${(similarity * 100).toFixed(1)}%): "${transcript}" vs "${lastQueuedTextRef.current}"`);
+              currentInterimRef.current = '';
+              return;
+            }
+          }
 
           if (isProcessingQueueRef.current) {
             userSpokeDuringTtsRef.current = true;
@@ -757,13 +780,16 @@ export default function useSimultaneousConversation({
       }
     }
 
-    // Chống trùng lặp tuyệt đối
-    if (lastQueuedTextRef.current === text) {
-      console.log(`🚫 [Queue] Bỏ qua câu trùng lặp: "${text}"`);
-      accumulatedTextRef.current = '';
-      currentInterimRef.current = '';
-      if (onInterimTextRef.current) onInterimTextRef.current('');
-      return;
+    // Chống trùng lặp tuyệt đối & tương đối bằng similarity ratio
+    if (lastQueuedTextRef.current) {
+      const similarityToLastQueued = getSimilarityRatio(text, lastQueuedTextRef.current);
+      if (similarityToLastQueued > 0.85) {
+        console.log(`🚫 [Queue] Bỏ qua câu trùng lặp hoặc tương đồng cao (${(similarityToLastQueued * 100).toFixed(1)}%): "${text}" vs "${lastQueuedTextRef.current}"`);
+        accumulatedTextRef.current = '';
+        currentInterimRef.current = '';
+        if (onInterimTextRef.current) onInterimTextRef.current('');
+        return;
+      }
     }
 
     const noiseWords = ['phẩy.', 'chấm.', 'phẩy', 'chấm', 'hỏi.', 'hỏi', 'comma', 'period', 'dot'];
@@ -792,7 +818,7 @@ export default function useSimultaneousConversation({
     if (autoDetectRef.current) {
       const textLang = detectLangFromText(text, srcLangCodeRef.current, tgtLangCodeRef.current);
       if (textLang && (textLang === srcLangCodeRef.current || textLang === tgtLangCodeRef.current) && textLang !== inputLangRef.current) {
-        if (activeTtsLangRef.current === textLang) {
+        if (activeTtsLangRef.current === textLang && !useHeadphonesRef.current) {
           console.log(`🛡️ [Text AEC Lang Filter] Bỏ qua đổi ngôn ngữ tự động sang "${textLang}" vì Robot đang phát loa.`);
         } else {
           console.log(`🔍 [Text-detect simultaneous] "${text.slice(0, 30)}..." → ${textLang} (was: ${inputLangRef.current})`);
