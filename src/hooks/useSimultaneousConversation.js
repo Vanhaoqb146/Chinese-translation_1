@@ -314,14 +314,10 @@ export default function useSimultaneousConversation({
       const transcript = e.result.text;
       if (!transcript) return;
 
-      // Echo cancellation: Quyết định có bỏ qua âm thanh dựa trên cặp ngôn ngữ của mic và loa
+      // Echo cancellation: Bỏ qua dội âm cùng ngôn ngữ khi robot phát loa ngoài (không tai nghe)
       if (activeTtsLangRef.current && !useHeadphonesRef.current) {
-        const shouldBlock = 
-          (inputLangRef.current === activeTtsLangRef.current) || // Cùng ngôn ngữ thì chắc chắn dội âm
-          (inputLangRef.current === 'zh' && activeTtsLangRef.current === 'vi'); // Mic Trung nhạy cảm với loa Việt
-
-        if (shouldBlock) {
-          console.log(`🛡️ [AEC Echo Guard] Bỏ qua interim vì robot đang phát loa ${activeTtsLangRef.current} (mic: ${inputLangRef.current}) và không dùng tai nghe`);
+        if (inputLangRef.current === activeTtsLangRef.current) {
+          console.log(`🛡️ [AEC Echo Guard] Bỏ qua interim vì robot đang phát loa cùng ngôn ngữ (${activeTtsLangRef.current}) và không dùng tai nghe`);
           return;
         }
       }
@@ -361,14 +357,10 @@ export default function useSimultaneousConversation({
       const transcript = e.result.text;
       if (!transcript) return;
 
-      // Echo cancellation: Quyết định có bỏ qua âm thanh dựa trên cặp ngôn ngữ của mic và loa
+      // Echo cancellation: Bỏ qua dội âm cùng ngôn ngữ khi robot phát loa ngoài (không tai nghe)
       if (activeTtsLangRef.current && !useHeadphonesRef.current) {
-        const shouldBlock = 
-          (inputLangRef.current === activeTtsLangRef.current) || // Cùng ngôn ngữ thì chắc chắn dội âm
-          (inputLangRef.current === 'zh' && activeTtsLangRef.current === 'vi'); // Mic Trung nhạy cảm với loa Việt
-
-        if (shouldBlock) {
-          console.log(`🛡️ [AEC Echo Guard] Bỏ qua FINAL vì robot đang phát loa ${activeTtsLangRef.current} (mic: ${inputLangRef.current}) và không dùng tai nghe`);
+        if (inputLangRef.current === activeTtsLangRef.current) {
+          console.log(`🛡️ [AEC Echo Guard] Bỏ qua FINAL vì robot đang phát loa cùng ngôn ngữ (${activeTtsLangRef.current}) và không dùng tai nghe`);
           return;
         }
       }
@@ -962,6 +954,26 @@ export default function useSimultaneousConversation({
 
       translatedText = translatedText.trim();
       if (!translatedText) throw new Error('Empty translation');
+
+      // Check cross-lingual echo cancellation (AI translation-based AEC)
+      if (overlapListeningRef.current && !useHeadphonesRef.current && lastRobotSpokenTextRef.current) {
+        const echoSimilarity = getSimilarityRatio(translatedText, lastRobotSpokenTextRef.current);
+        console.log(`🛡️ [AI Cross-lingual Echo Check] Độ tương đồng bản dịch với câu loa phát: ${(echoSimilarity * 100).toFixed(1)}% ("${translatedText}" vs "${lastRobotSpokenTextRef.current}")`);
+        if (echoSimilarity > 0.70) {
+          console.log(`🚫 [AI Cross-lingual Echo Filter] Phát hiện tiếng vọng dịch lại từ loa ngoài (trùng ${(echoSimilarity * 100).toFixed(1)}%), tự động BỎ QUA.`);
+          
+          // Khôi phục lại âm lượng phát loa
+          restoreTtsVolume();
+          isSpeakingRef.current = false;
+          translationQueueRef.current.shift();
+          isProcessingQueueRef.current = false;
+          setQueueLength(translationQueueRef.current.length);
+          
+          // Tiếp tục xử lý tác vụ tiếp theo
+          processTranslationQueue();
+          return;
+        }
+      }
 
       // Lưu lại câu robot sắp đọc để phục vụ bộ lọc chống vọng AI
       lastRobotSpokenTextRef.current = translatedText;
