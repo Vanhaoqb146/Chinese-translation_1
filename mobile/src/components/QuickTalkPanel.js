@@ -202,7 +202,7 @@ export default function QuickTalkPanel({
 
   // Start Speech Capture (Universal for Click and Hold)
   const startRecordingLoop = async (langType) => {
-    if (Platform.OS === 'android') Vibration.vibrate(80);
+    if (Platform.OS === 'android') Vibration.vibrate([0, 100]);
     if (isRecordingRef.current || isProcessing) return;
 
     try {
@@ -322,7 +322,7 @@ export default function QuickTalkPanel({
 
   // Stop recognition and translate
   const stopRecognitionAndTranslate = async (langType, options = {}) => {
-    if (Platform.OS === 'android') Vibration.vibrate(80);
+    if (Platform.OS === 'android') Vibration.vibrate([0, 100]);
     const stopDelayMs = options.stopDelayMs || 0;
 
     if (silenceTimerRef.current) {

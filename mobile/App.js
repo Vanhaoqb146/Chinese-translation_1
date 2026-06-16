@@ -374,7 +374,7 @@ export default function App() {
 
   // STT: Start audio recognition.
   const startRecording = async () => {
-    if (Platform.OS === 'android') Vibration.vibrate(80);
+    if (Platform.OS === 'android') Vibration.vibrate([0, 100]);
     if (isRecordingRef.current || isStartingRecognitionRef.current) return;
 
     const sessionId = recognitionSessionRef.current + 1;
@@ -498,7 +498,7 @@ export default function App() {
 
   // STT: Stop Recording
   const stopRecording = async () => {
-    if (Platform.OS === 'android') Vibration.vibrate(80);
+    if (Platform.OS === 'android') Vibration.vibrate([0, 100]);
     if (!isRecordingRef.current && !isStartingRecognitionRef.current) return;
 
     recognitionStopRequestedRef.current = true;

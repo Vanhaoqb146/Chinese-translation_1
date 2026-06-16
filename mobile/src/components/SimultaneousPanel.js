@@ -586,7 +586,7 @@ export default function SimultaneousPanel({
   };
 
   const stopSimultaneous = async () => {
-    if (Platform.OS === 'android') Vibration.vibrate(80);
+    if (Platform.OS === 'android') Vibration.vibrate([0, 100]);
     stoppingRef.current = true;
     captureSessionRef.current += 1;
     pendingRecognitionResultsRef.current.clear();
@@ -615,7 +615,7 @@ export default function SimultaneousPanel({
   };
 
   const handlePressMic = async (langType) => {
-    if (Platform.OS === 'android') Vibration.vibrate(80);
+    if (Platform.OS === 'android') Vibration.vibrate([0, 100]);
     if (isActiveRef.current) {
       await stopSimultaneous();
       return;
