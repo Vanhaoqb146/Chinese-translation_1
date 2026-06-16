@@ -16,7 +16,7 @@
 * **Project Name:** VoiceTranslate AI
 * **Description:** Real-time voice translation app, supporting multi-language, AI-integrated (Whisper + GPT) with a modern Premium Dark Theme interface.
 * **Target Platforms:** Next.js Web App + Native Mobile App (Android/iOS via Expo SDK 54)
-* **Last Updated:** 2026-06-15
+* **Last Updated:** 2026-06-16
 * **Self-Update Command:** `node scripts/update-skill.js`
 
 ---

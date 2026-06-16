@@ -286,7 +286,7 @@ export default function QuickTalkPanel({
       setActiveManualLang(langType);
       
       await Voice.start(speechLocale, {
-        continuous: micModeRef.current === 'click',
+        continuous: true, // Luôn thu âm liên tục để tránh tự động ngắt mic khi người dùng tạm nghỉ nói ở chế độ nhấn giữ (Hold)
       });
     } catch (err) {
       console.error('Failed to start Voice recording:', err);
