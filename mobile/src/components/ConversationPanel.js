@@ -159,6 +159,8 @@ export default function ConversationPanel({
   // Live STT States
   const [liveText, setLiveText] = useState('');
   const liveTextRef = useRef('');
+  const accumulatedTextRef = useRef('');
+  const interimTextRef = useRef('');
   const silenceTimerRef = useRef(null);
 
   const clearSilenceTimer = () => {
@@ -544,6 +546,8 @@ export default function ConversationPanel({
 
       setLiveText('');
       liveTextRef.current = '';
+      accumulatedTextRef.current = '';
+      interimTextRef.current = '';
       detectedAutoLangRef.current = null;
       if (silenceTimerRef.current) {
         clearTimeout(silenceTimerRef.current);
@@ -571,6 +575,8 @@ export default function ConversationPanel({
       Voice.onSpeechStart = () => {
         setLiveText('');
         liveTextRef.current = '';
+        accumulatedTextRef.current = '';
+        interimTextRef.current = '';
         setIsSpeechActive(true);
       };
 
@@ -581,8 +587,10 @@ export default function ConversationPanel({
           isTtsPlayingRef.current
         ) return;
         if (e.value && e.value[0]) {
-          setLiveText(e.value[0]);
-          liveTextRef.current = e.value[0];
+          accumulatedTextRef.current = (accumulatedTextRef.current + ' ' + e.value[0]).trim();
+          interimTextRef.current = '';
+          liveTextRef.current = accumulatedTextRef.current;
+          setLiveText(accumulatedTextRef.current);
           
           if (micModeRef.current !== 'hold') {
             startSilenceTimer(langType, silenceSecondsRef.current);
@@ -597,8 +605,10 @@ export default function ConversationPanel({
           isTtsPlayingRef.current
         ) return;
         if (e.value && e.value[0]) {
-          setLiveText(e.value[0]);
-          liveTextRef.current = e.value[0];
+          interimTextRef.current = e.value[0];
+          const fullText = (accumulatedTextRef.current + ' ' + interimTextRef.current).trim();
+          liveTextRef.current = fullText;
+          setLiveText(fullText);
 
           if (micModeRef.current !== 'hold') {
             startSilenceTimer(langType, silenceSecondsRef.current);
@@ -643,7 +653,7 @@ export default function ConversationPanel({
 
       const speechLocale = getSpeechLocale(inputLang.translateCode);
       const recognitionOptions = {
-        continuous: micModeRef.current !== 'hold',
+        continuous: true, // Luôn thu âm liên tục để tránh tự động ngắt mic khi người dùng tạm nghỉ nói ở chế độ nhấn giữ (Hold)
       };
 
       isRecordingRef.current = true;

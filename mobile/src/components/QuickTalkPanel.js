@@ -98,6 +98,8 @@ export default function QuickTalkPanel({
   // Live STT States
   const [liveText, setLiveText] = useState('');
   const liveTextRef = useRef('');
+  const accumulatedTextRef = useRef('');
+  const interimTextRef = useRef('');
   const silenceTimerRef = useRef(null);
 
   // Refs for tracking recording
@@ -228,6 +230,8 @@ export default function QuickTalkPanel({
 
       setLiveText('');
       liveTextRef.current = '';
+      accumulatedTextRef.current = '';
+      interimTextRef.current = '';
       if (silenceTimerRef.current) {
         clearTimeout(silenceTimerRef.current);
         silenceTimerRef.current = null;
@@ -237,13 +241,17 @@ export default function QuickTalkPanel({
       Voice.onSpeechStart = () => {
         setLiveText('');
         liveTextRef.current = '';
+        accumulatedTextRef.current = '';
+        interimTextRef.current = '';
         setIsSpeechActive(true);
       };
 
       Voice.onSpeechResults = (e) => {
         if (e.value && e.value[0]) {
-          setLiveText(e.value[0]);
-          liveTextRef.current = e.value[0];
+          accumulatedTextRef.current = (accumulatedTextRef.current + ' ' + e.value[0]).trim();
+          interimTextRef.current = '';
+          liveTextRef.current = accumulatedTextRef.current;
+          setLiveText(accumulatedTextRef.current);
           
           if (micModeRef.current === 'click') {
             if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
@@ -256,8 +264,10 @@ export default function QuickTalkPanel({
 
       Voice.onSpeechPartialResults = (e) => {
         if (e.value && e.value[0]) {
-          setLiveText(e.value[0]);
-          liveTextRef.current = e.value[0];
+          interimTextRef.current = e.value[0];
+          const fullText = (accumulatedTextRef.current + ' ' + interimTextRef.current).trim();
+          liveTextRef.current = fullText;
+          setLiveText(fullText);
 
           if (micModeRef.current === 'click') {
             if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
