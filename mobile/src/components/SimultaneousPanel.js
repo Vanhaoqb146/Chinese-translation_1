@@ -12,6 +12,7 @@ import {
   Switch,
   NativeModules,
   Platform,
+  Vibration,
 } from 'react-native';
 import { Audio } from 'expo-av';
 import { Feather } from '@expo/vector-icons';
@@ -585,6 +586,7 @@ export default function SimultaneousPanel({
   };
 
   const stopSimultaneous = async () => {
+    if (Platform.OS === 'android') Vibration.vibrate(80);
     stoppingRef.current = true;
     captureSessionRef.current += 1;
     pendingRecognitionResultsRef.current.clear();
@@ -613,6 +615,7 @@ export default function SimultaneousPanel({
   };
 
   const handlePressMic = async (langType) => {
+    if (Platform.OS === 'android') Vibration.vibrate(80);
     if (isActiveRef.current) {
       await stopSimultaneous();
       return;

@@ -12,6 +12,7 @@ import {
   Platform,
   Alert,
   Animated,
+  Vibration,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Audio } from 'expo-av';
@@ -373,6 +374,7 @@ export default function App() {
 
   // STT: Start audio recognition.
   const startRecording = async () => {
+    if (Platform.OS === 'android') Vibration.vibrate(80);
     if (isRecordingRef.current || isStartingRecognitionRef.current) return;
 
     const sessionId = recognitionSessionRef.current + 1;
@@ -496,6 +498,7 @@ export default function App() {
 
   // STT: Stop Recording
   const stopRecording = async () => {
+    if (Platform.OS === 'android') Vibration.vibrate(80);
     if (!isRecordingRef.current && !isStartingRecognitionRef.current) return;
 
     recognitionStopRequestedRef.current = true;

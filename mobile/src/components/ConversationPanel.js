@@ -12,6 +12,7 @@ import {
   Switch,
   NativeModules,
   Platform,
+  Vibration,
 } from 'react-native';
 import { Audio } from 'expo-av';
 import { Feather } from '@expo/vector-icons';
@@ -387,6 +388,7 @@ export default function ConversationPanel({
   };
 
   const handlePressMic = async (langType) => {
+    if (Platform.OS === 'android') Vibration.vibrate(80);
     if (isProcessing) return;
 
     if (autoDetect && langType === 'auto') {
@@ -409,6 +411,7 @@ export default function ConversationPanel({
   };
 
   const handleHoldStart = async (langType) => {
+    if (Platform.OS === 'android') Vibration.vibrate(80);
     if (isProcessing || isRecordingRef.current) return;
     if (autoDetect && langType === 'auto') {
       autoListeningWantedRef.current = true;
@@ -419,6 +422,7 @@ export default function ConversationPanel({
   };
 
   const handleHoldEnd = async () => {
+    if (Platform.OS === 'android') Vibration.vibrate(80);
     if (Date.now() - holdStartTimeRef.current < 500) return;
     if (!isRecordingRef.current) return;
     await stopRecognitionAndTranslate(activeManualLangRef.current, { resumeContinuous: false, stopDelayMs: 600 });

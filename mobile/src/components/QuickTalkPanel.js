@@ -10,6 +10,8 @@ import {
   Alert,
   Modal,
   Switch,
+  Platform,
+  Vibration,
 } from 'react-native';
 import { Audio } from 'expo-av';
 import { Feather } from '@expo/vector-icons';
@@ -200,6 +202,7 @@ export default function QuickTalkPanel({
 
   // Start Speech Capture (Universal for Click and Hold)
   const startRecordingLoop = async (langType) => {
+    if (Platform.OS === 'android') Vibration.vibrate(80);
     if (isRecordingRef.current || isProcessing) return;
 
     try {
@@ -319,6 +322,7 @@ export default function QuickTalkPanel({
 
   // Stop recognition and translate
   const stopRecognitionAndTranslate = async (langType, options = {}) => {
+    if (Platform.OS === 'android') Vibration.vibrate(80);
     const stopDelayMs = options.stopDelayMs || 0;
 
     if (silenceTimerRef.current) {
