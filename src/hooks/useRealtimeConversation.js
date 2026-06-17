@@ -838,12 +838,13 @@ export default function useRealtimeConversation({
 
                   audio.onended = done;
                   audio.onerror = done;
-                  // [FIX] Timeout an toàn — mobile Safari hay không fire onended
+                  // Tính toán thời gian timeout an toàn động dựa trên độ dài của văn bản dịch (tối thiểu 15s, tối đa 120s)
+                  const timeoutMs = Math.min(120000, Math.max(15000, translatedText.length * 150));
                   const safetyTimeout = setTimeout(() => {
-                    console.warn('⚠️ [TTS] Timeout — onended không fire, force resolve');
+                    console.warn(`⚠️ [TTS] Timeout — onended không fire, force resolve sau ${timeoutMs}ms`);
                     try { audio.pause(); } catch (e) { /* ignore */ }
                     done();
-                  }, 15000);
+                  }, timeoutMs);
 
                   audio.onloadedmetadata = () => {
                     if (!resolved && audio.duration && isFinite(audio.duration)) {
