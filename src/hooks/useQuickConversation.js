@@ -352,11 +352,13 @@ export default function useQuickConversation({
 
                   audio.onended = done;
                   audio.onerror = done;
+                  // Tính toán thời gian timeout an toàn động dựa trên độ dài của văn bản dịch (tối thiểu 15s, tối đa 120s)
+                  const timeoutMs = Math.min(120000, Math.max(15000, translatedText.length * 150));
                   const safetyTimeout = setTimeout(() => {
-                    console.warn('⚠️ [TTS Timeout] Force resolve phát âm.');
+                    console.warn(`⚠️ [TTS Timeout] Force resolve phát âm sau ${timeoutMs}ms.`);
                     try { audio.pause(); } catch (e) { /* ignore */ }
                     done();
-                  }, 12000);
+                  }, timeoutMs);
 
                   // Áp dụng tốc độ phát giọng nói (Speech Rate)
                   try {
