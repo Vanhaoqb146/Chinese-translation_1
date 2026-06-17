@@ -33,8 +33,25 @@ function mergeOverlap(a, b) {
 
   const cleanWord = (w) => w.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
 
-  const maxOverlap = Math.min(aWords.length, bWords.length);
+  // 1. Kiểm tra lặp đầu-đầu (head-to-head) khi cả 2 phiên đều bắt đầu bằng cùng các từ
+  let prefixMatchLen = 0;
+  const maxPrefixLen = Math.min(aWords.length, bWords.length);
+  for (let i = 0; i < maxPrefixLen; i++) {
+    if (cleanWord(aWords[i]) === cleanWord(bWords[i])) {
+      prefixMatchLen++;
+    } else {
+      break;
+    }
+  }
 
+  // Nếu chung nhau từ 2 từ đầu trở lên, ghép theo kiểu căn chỉnh tiền tố
+  if (prefixMatchLen >= 2) {
+    const bRemaining = bWords.slice(prefixMatchLen).join(' ');
+    return a + (bRemaining ? ' ' + bRemaining : '');
+  }
+
+  // 2. Kiểm tra lặp đuôi-đầu (tail-to-head) thông thường
+  const maxOverlap = Math.min(aWords.length, bWords.length);
   for (let len = maxOverlap; len > 0; len--) {
     const aTail = aWords.slice(aWords.length - len).map(cleanWord).join(' ');
     const bHead = bWords.slice(0, len).map(cleanWord).join(' ');
