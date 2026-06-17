@@ -194,6 +194,7 @@ export default function useQuickConversation({
       text = mergeOverlap(text, interim);
     }
     if (!text) return;
+    console.log('🔄 [Quick Speech] triggerTranslation() started. text:', text);
 
     // Chuẩn hóa văn bản, lọc từ thừa
     text = text.replace(/(?<=^|\s|[.,!?])(ừm|ờ|à|ơi|ơ)(?=\s|[.,!?]|$)/gi, '');
@@ -564,7 +565,7 @@ export default function useQuickConversation({
 
   // ====== DỪNG NÓI (stop) ======
   const stop = useCallback(async () => {
-    console.log('🛑 [Quick Speech] Dừng thu âm...');
+    console.log('🛑 [Quick Speech] stop() started. micMode:', micModeRef.current);
     wantListeningRef.current = false;
     clearTimeout(silenceTimeoutRef.current);
     clearInterval(elapsedTimerRef.current);
@@ -601,6 +602,7 @@ export default function useQuickConversation({
     });
 
     const hasText = accumulatedTextRef.current.trim() || currentInterimRef.current.trim();
+    console.log('🛑 [Quick Speech] stop() finished waiting. hasText:', !!hasText, 'text:', hasText, 'isSpeaking:', isSpeakingRef.current);
     if (hasText && !isSpeakingRef.current) {
       triggerTranslation();
     } else {

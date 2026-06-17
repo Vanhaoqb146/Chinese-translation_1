@@ -466,9 +466,9 @@ export default function SimultaneousPanel({
         replayAudioRef.current = null;
       }
       holdStartTimeRef.current = Date.now();
-      if (e?.target?.setPointerCapture && e?.pointerId != null) {
+      if (e?.currentTarget?.setPointerCapture && e?.pointerId != null) {
         try {
-          e.target.setPointerCapture(e.pointerId);
+          e.currentTarget.setPointerCapture(e.pointerId);
         } catch (err) {
           /* ignore */
         }
@@ -513,6 +513,10 @@ export default function SimultaneousPanel({
       handleHoldStart(lang, e);
     },
     onPointerUp: (e) => {
+      e.preventDefault();
+      handleHoldEnd();
+    },
+    onPointerCancel: (e) => {
       e.preventDefault();
       handleHoldEnd();
     },

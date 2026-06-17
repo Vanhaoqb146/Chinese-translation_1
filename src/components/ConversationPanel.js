@@ -314,8 +314,8 @@ export default function ConversationPanel({
       replayAudioRef.current = null;
     }
     holdStartTimeRef.current = Date.now();
-    if (e?.target?.setPointerCapture && e?.pointerId != null) {
-      try { e.target.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    if (e?.currentTarget?.setPointerCapture && e?.pointerId != null) {
+      try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
     }
     conv.start(lang);
     setTimeout(() => setReplayingId(null), 0);
@@ -351,6 +351,7 @@ export default function ConversationPanel({
   const holdProps = (lang) => ({
     onPointerDown: (e) => { e.preventDefault(); handleHoldStart(lang, e); },
     onPointerUp: (e) => { e.preventDefault(); handleHoldEnd(); },
+    onPointerCancel: (e) => { e.preventDefault(); handleHoldEnd(); },
     onContextMenu: (e) => e.preventDefault(),
     style: { touchAction: 'none' },
   });

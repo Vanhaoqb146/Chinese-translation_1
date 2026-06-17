@@ -198,6 +198,7 @@ class VoiceCompatibilityAdapter {
       requiresOnDeviceRecognition: false,
       androidIntentOptions,
       ...(Platform.OS === 'android' ? { androidLiveAec } : {}),
+      volumeChangeEventOptions: options.volumeChangeEventOptions,
     };
 
     if (Platform.OS === 'android' && androidRecognitionServicePackage) {
