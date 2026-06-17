@@ -31,36 +31,55 @@ function mergeOverlap(a, b) {
   const aWords = a.split(/\s+/);
   const bWords = b.split(/\s+/);
 
-  const cleanWord = (w) => w.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
+  const clean = (w) => w.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
+  const aClean = aWords.map(clean);
+  const bClean = bWords.map(clean);
 
-  // 1. Kiểm tra lặp đầu-đầu (head-to-head) khi cả 2 phiên đều bắt đầu bằng cùng các từ
-  let prefixMatchLen = 0;
-  const maxPrefixLen = Math.min(aWords.length, bWords.length);
-  for (let i = 0; i < maxPrefixLen; i++) {
-    if (cleanWord(aWords[i]) === cleanWord(bWords[i])) {
-      prefixMatchLen++;
-    } else {
-      break;
+  let bestOverlap = {
+    aStart: -1,
+    bStart: -1,
+    length: 0,
+    totalLen: 0
+  };
+
+  // Quét qua các vị trí trong chuỗi a để tìm vùng khớp tốt nhất với chuỗi b
+  for (let i = 0; i < aWords.length; i++) {
+    let matchCount = 0;
+    let len = 0;
+    
+    while (i + len < aWords.length && len < bWords.length) {
+      if (aClean[i + len] === bClean[len]) {
+        matchCount++;
+      }
+      len++;
+    }
+    
+    // Tỷ lệ khớp từ 70% trở lên và khớp tối thiểu 2 từ để tránh trùng hợp ngẫu nhiên
+    const matchRate = len > 0 ? matchCount / len : 0;
+    if (matchRate > 0.7 && matchCount >= 2) {
+      if (matchCount > bestOverlap.length) {
+        bestOverlap = {
+          aStart: i,
+          bStart: 0,
+          length: matchCount,
+          totalLen: len
+        };
+      }
     }
   }
 
-  // Nếu chung nhau từ 2 từ đầu trở lên, ghép theo kiểu căn chỉnh tiền tố
-  if (prefixMatchLen >= 2) {
-    const bRemaining = bWords.slice(prefixMatchLen).join(' ');
-    return a + (bRemaining ? ' ' + bRemaining : '');
+  if (bestOverlap.length >= 2) {
+    const aPrefix = aWords.slice(0, bestOverlap.aStart).join(' ');
+    const aSuffix = aWords.slice(bestOverlap.aStart + bestOverlap.totalLen).join(' ');
+    
+    let result = '';
+    if (aPrefix) result += aPrefix + ' ';
+    result += b;
+    if (aSuffix) result += ' ' + aSuffix;
+    return result;
   }
 
-  // 2. Kiểm tra lặp đuôi-đầu (tail-to-head) thông thường
-  const maxOverlap = Math.min(aWords.length, bWords.length);
-  for (let len = maxOverlap; len > 0; len--) {
-    const aTail = aWords.slice(aWords.length - len).map(cleanWord).join(' ');
-    const bHead = bWords.slice(0, len).map(cleanWord).join(' ');
-    if (aTail === bHead && aTail.trim() !== '') {
-      const bRemaining = bWords.slice(len).join(' ');
-      return a + (bRemaining ? ' ' + bRemaining : '');
-    }
-  }
-
+  // Phương án dự phòng: nếu không tìm thấy khớp đáng kể, ghép nối tiếp thông thường
   return a + ' ' + b;
 }
 
