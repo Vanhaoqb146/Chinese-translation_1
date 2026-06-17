@@ -636,17 +636,33 @@ export default function ConversationPanel({
 
       Voice.onRecognitionEnd = () => {
         setIsSpeechActive(false);
-        isRecordingRef.current = false;
 
+        // If the session ended naturally/unexpectedly while we are still supposed to be recording
         if (
-          micModeRef.current === 'continuous' &&
           isManualRecordingRef.current &&
           !isProcessingRef.current &&
-          !isTtsPlayingRef.current &&
-          !isRecordingRef.current
+          !isTtsPlayingRef.current
         ) {
-          console.log('[🎙 Conv] Recognition ended unexpectedly in continuous mode, restarting...');
-          triggerContinuousMicRestart(langType);
+          const textToTranslate = liveTextRef.current;
+          if (textToTranslate && textToTranslate.trim()) {
+            console.log('[🎙 Conv] Recognition ended naturally with text. Translating...');
+            isRecordingRef.current = true; // Keep true so stopRecognitionAndTranslate doesn't bail out
+            stopRecognitionAndTranslate(langType);
+          } else {
+            console.log('[🎙 Conv] Recognition ended naturally with no text.');
+            isRecordingRef.current = false;
+            if (micModeRef.current === 'continuous') {
+              triggerContinuousMicRestart(langType);
+            } else {
+              isManualRecordingRef.current = false;
+              setIsManualRecording(false);
+              activeManualLangRef.current = null;
+              setActiveManualLang(null);
+              stopBackgroundService();
+            }
+          }
+        } else {
+          isRecordingRef.current = false;
         }
       };
 

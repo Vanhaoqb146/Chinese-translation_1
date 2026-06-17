@@ -392,6 +392,12 @@ export default function SimultaneousPanel({
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
+        audio.preload = 'auto';
+        audio.playsInline = true;
+        try {
+          audio.setAttribute('playsinline', 'true');
+          audio.setAttribute('webkit-playsinline', 'true');
+        } catch (e) { /* ignore */ }
         replayAudioRef.current = audio;
 
         // Áp dụng tốc độ phát giọng nói (Speech Rate)
@@ -474,7 +480,6 @@ export default function SimultaneousPanel({
   );
 
   const handleHoldEnd = useCallback(() => {
-    if (Date.now() - holdStartTimeRef.current < 500) return;
     if (!conv.isListening) return;
     conv.stopHold();
   }, [conv]);
@@ -508,10 +513,6 @@ export default function SimultaneousPanel({
       handleHoldStart(lang, e);
     },
     onPointerUp: (e) => {
-      e.preventDefault();
-      handleHoldEnd();
-    },
-    onPointerLeave: (e) => {
       e.preventDefault();
       handleHoldEnd();
     },

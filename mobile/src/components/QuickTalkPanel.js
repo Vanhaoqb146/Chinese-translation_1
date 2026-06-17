@@ -106,6 +106,7 @@ export default function QuickTalkPanel({
 
   // Refs for tracking recording
   const isTtsPlayingRef = useRef(false);
+  const isProcessingRef = useRef(false);
   
   const micModeRef = useRef(micMode);
   const silenceSecondsRef = useRef(silenceSeconds);
@@ -124,6 +125,7 @@ export default function QuickTalkPanel({
   micModeRef.current = micMode;
   silenceSecondsRef.current = silenceSeconds;
   activeManualLangRef.current = activeManualLang;
+  isProcessingRef.current = isProcessing;
   providerRef.current = provider;
   speedRef.current = speed;
   srcVoiceRef.current = srcVoice;
@@ -284,6 +286,31 @@ export default function QuickTalkPanel({
       Voice.onSpeechError = (e) => {
         console.warn('Voice recognition error inside QuickTalkPanel:', e);
         setIsSpeechActive(false);
+      };
+
+      Voice.onRecognitionEnd = () => {
+        setIsSpeechActive(false);
+
+        // If the session ended naturally/unexpectedly while we are still supposed to be recording
+        if (
+          activeManualLangRef.current &&
+          !isProcessingRef.current &&
+          !isTtsPlayingRef.current
+        ) {
+          const textToTranslate = liveTextRef.current;
+          if (textToTranslate && textToTranslate.trim()) {
+            console.log('[🎙 Quick] Recognition ended naturally with text. Translating...');
+            isRecordingRef.current = true; // Keep true so stopRecognitionAndTranslate doesn't bail out
+            stopRecognitionAndTranslate(langType);
+          } else {
+            console.log('[🎙 Quick] Recognition ended naturally with no text. Resetting states.');
+            isRecordingRef.current = false;
+            setActiveManualLang(null);
+            stopBackgroundService();
+          }
+        } else {
+          isRecordingRef.current = false;
+        }
       };
 
       const srcLang = LANGUAGES[srcIdx];

@@ -227,6 +227,12 @@ export default function HomePage() {
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
+        audio.preload = 'auto';
+        audio.playsInline = true;
+        try {
+          audio.setAttribute('playsinline', 'true');
+          audio.setAttribute('webkit-playsinline', 'true');
+        } catch (e) { /* ignore */ }
         audio.onended = () => { URL.revokeObjectURL(url); setPlayingId(null); resolve(); };
         audio.onerror = () => { URL.revokeObjectURL(url); setPlayingId(null); resolve(); };
         audio.play().catch(() => { setPlayingId(null); resolve(); });

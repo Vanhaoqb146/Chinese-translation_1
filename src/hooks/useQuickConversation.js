@@ -21,6 +21,32 @@ function detectLangFromText(text, srcLang = 'zh', tgtLang = 'vi') {
   return null;
 }
 
+// Tránh lặp từ do cơ chế thu âm liên tục hoặc restart của trình duyệt di động
+function mergeOverlap(a, b) {
+  a = a.trim();
+  b = b.trim();
+  if (!a) return b;
+  if (!b) return a;
+
+  const aWords = a.split(/\s+/);
+  const bWords = b.split(/\s+/);
+
+  const cleanWord = (w) => w.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
+
+  const maxOverlap = Math.min(aWords.length, bWords.length);
+
+  for (let len = maxOverlap; len > 0; len--) {
+    const aTail = aWords.slice(aWords.length - len).map(cleanWord).join(' ');
+    const bHead = bWords.slice(0, len).map(cleanWord).join(' ');
+    if (aTail === bHead && aTail.trim() !== '') {
+      const bRemaining = bWords.slice(len).join(' ');
+      return a + (bRemaining ? ' ' + bRemaining : '');
+    }
+  }
+
+  return a + ' ' + b;
+}
+
 /**
  * useQuickConversation — Hook Giao Tiếp Nhanh sử dụng Web Speech API native
  *
@@ -123,7 +149,7 @@ export default function useQuickConversation({
     let text = forcedText || accumulatedTextRef.current.trim();
     const interim = currentInterimRef.current.trim();
     if (!forcedText && interim) {
-      text = text ? text + ' ' + interim : interim;
+      text = mergeOverlap(text, interim);
     }
     if (!text) return;
 
@@ -169,6 +195,12 @@ export default function useQuickConversation({
       recognitionRef.current = null;
     }
 
+    const translateController = new AbortController();
+    const translateTimeout = setTimeout(() => {
+      console.warn('⚠️ [Translate Timeout] Aborting fetch/stream after 15 seconds.');
+      translateController.abort();
+    }, 15000);
+
     try {
       // 1. Gọi API Translate (Streaming SSE để nhận chữ siêu tốc)
       const translateRes = await fetch('/api/translate', {
@@ -182,7 +214,7 @@ export default function useQuickConversation({
           history: conversationHistoryRef.current,
           stream: true,
         }),
-        signal: AbortSignal.timeout(15000),
+        signal: translateController.signal,
       });
 
       if (!translateRes.ok) throw new Error(`Lỗi dịch thuật: ${translateRes.status}`);
@@ -212,6 +244,7 @@ export default function useQuickConversation({
         }
         if (streamDone) break;
       }
+      clearTimeout(translateTimeout);
 
       translatedText = translatedText.trim();
       if (!translatedText) throw new Error('Bản dịch rỗng');
@@ -305,6 +338,7 @@ export default function useQuickConversation({
         }
       }
     } catch (err) {
+      clearTimeout(translateTimeout);
       console.error('❌ [Pipeline Lỗi]', err);
       if (onErrorRef.current) onErrorRef.current(err.message);
     }
@@ -404,7 +438,7 @@ export default function useQuickConversation({
 
       // Ghép văn bản của phiên hiện tại vào văn bản tích lũy của các phiên trước
       const prev = prevSessionsTextRef.current || '';
-      accumulatedTextRef.current = prev + (prev && sessionFinalText ? ' ' : '') + sessionFinalText;
+      accumulatedTextRef.current = mergeOverlap(prev, sessionFinalText);
       currentInterimRef.current = sessionInterimText;
 
       if (hasNewFinal) {
@@ -417,7 +451,7 @@ export default function useQuickConversation({
         }
       }
 
-      const display = (accumulatedTextRef.current + (accumulatedTextRef.current && currentInterimRef.current ? ' ' : '') + currentInterimRef.current).trim();
+      const display = mergeOverlap(accumulatedTextRef.current, sessionInterimText).trim();
       if (onInterimTextRef.current) onInterimTextRef.current(display);
 
       resetSilenceTimer();

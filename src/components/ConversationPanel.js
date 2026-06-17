@@ -269,6 +269,12 @@ export default function ConversationPanel({
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
+      audio.preload = 'auto';
+      audio.playsInline = true;
+      try {
+        audio.setAttribute('playsinline', 'true');
+        audio.setAttribute('webkit-playsinline', 'true');
+      } catch (e) { /* ignore */ }
       replayAudioRef.current = audio;
 
       // Áp dụng tốc độ phát giọng nói (Speech Rate)
@@ -316,7 +322,6 @@ export default function ConversationPanel({
   }, [conv, convStatus]);
 
   const handleHoldEnd = useCallback(() => {
-    if (Date.now() - holdStartTimeRef.current < 500) return;
     if (!conv.isListening) return;
     conv.stopHold();
   }, [conv]);
@@ -346,7 +351,6 @@ export default function ConversationPanel({
   const holdProps = (lang) => ({
     onPointerDown: (e) => { e.preventDefault(); handleHoldStart(lang, e); },
     onPointerUp: (e) => { e.preventDefault(); handleHoldEnd(); },
-    onPointerLeave: (e) => { e.preventDefault(); handleHoldEnd(); },
     onContextMenu: (e) => e.preventDefault(),
     style: { touchAction: 'none' },
   });

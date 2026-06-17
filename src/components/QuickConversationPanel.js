@@ -243,6 +243,12 @@ export default function QuickConversationPanel({
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
+      audio.preload = 'auto';
+      audio.playsInline = true;
+      try {
+        audio.setAttribute('playsinline', 'true');
+        audio.setAttribute('webkit-playsinline', 'true');
+      } catch (e) { /* ignore */ }
       replayAudioRef.current = audio;
 
       // Áp dụng tốc độ phát giọng nói (Speech Rate)
@@ -291,8 +297,6 @@ export default function QuickConversationPanel({
   }, [conv, convStatus, stopReplay]);
 
   const handleHoldEnd = useCallback(() => {
-    // Ép buộc người dùng giữ tối thiểu 300ms tránh nhấp chuột vô tình
-    if (Date.now() - holdStartTimeRef.current < 300) return;
     if (!conv.isListening) return;
     conv.stop();
   }, [conv]);
@@ -322,7 +326,6 @@ export default function QuickConversationPanel({
   const holdProps = (lang) => ({
     onPointerDown: (e) => { e.preventDefault(); handleHoldStart(lang, e); },
     onPointerUp: (e) => { e.preventDefault(); handleHoldEnd(); },
-    onPointerLeave: (e) => { e.preventDefault(); handleHoldEnd(); },
     onContextMenu: (e) => e.preventDefault(),
     style: { touchAction: 'none' },
   });
