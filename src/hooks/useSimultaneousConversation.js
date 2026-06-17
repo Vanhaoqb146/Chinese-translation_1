@@ -1052,13 +1052,11 @@ export default function useSimultaneousConversation({
                   audio.onended = done;
                   audio.onerror = done;
                   
-                  // Tính toán thời gian timeout an toàn động dựa trên độ dài của văn bản dịch (tối thiểu 15s, tối đa 120s)
-                  const timeoutMs = Math.min(120000, Math.max(15000, translatedText.length * 150));
+                  // Khởi tạo thời gian chờ an toàn tĩnh cực dài (5 phút) và không ngắt âm thanh khi kích hoạt
                   const safetyTimeout = setTimeout(() => {
-                    console.warn(`⚠️ [Queue TTS] Timeout an toàn phát âm sau ${timeoutMs}ms, bỏ qua để giải phóng hàng đợi`);
-                    try { audio.pause(); } catch (e) { /* ignore */ }
-                    done();
-                  }, timeoutMs);
+                    console.warn('⚠️ [Queue TTS] Timeout an toàn phát âm (5 phút), bỏ qua để giải phóng hàng đợi');
+                    done(); // Giải phóng trạng thái giao diện nhưng không gọi audio.pause() để cho phép âm thanh tiếp tục phát đến hết
+                  }, 300000);
 
                   audio.onloadedmetadata = () => {
                     if (!resolved && audio.duration && isFinite(audio.duration)) {

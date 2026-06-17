@@ -28,8 +28,10 @@ function mergeOverlap(a, b) {
   if (!a) return b;
   if (!b) return a;
 
-  const aWords = a.split(/\s+/);
-  const bWords = b.split(/\s+/);
+  // Đối với tiếng Trung/Nhật/Hàn (CJK), ta tách theo từng ký tự. Với các ngôn ngữ khác tách theo từ (khoảng trắng).
+  const hasCJK = CJK_CHARS.test(a) || CJK_CHARS.test(b);
+  const aWords = hasCJK ? a.split('') : a.split(/\s+/);
+  const bWords = hasCJK ? b.split('') : b.split(/\s+/);
 
   const clean = (w) => w.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g, "");
   const aClean = aWords.map(clean);
@@ -54,7 +56,7 @@ function mergeOverlap(a, b) {
       len++;
     }
     
-    // Tỷ lệ khớp từ 70% trở lên và khớp tối thiểu 2 từ để tránh trùng hợp ngẫu nhiên
+    // Tỷ lệ khớp từ 70% trở lên và khớp tối thiểu 2 ký tự (hoặc từ) để tránh trùng hợp ngẫu nhiên
     const matchRate = len > 0 ? matchCount / len : 0;
     if (matchRate > 0.7 && matchCount >= 2) {
       if (matchCount > bestOverlap.length) {
@@ -69,18 +71,22 @@ function mergeOverlap(a, b) {
   }
 
   if (bestOverlap.length >= 2) {
-    const aPrefix = aWords.slice(0, bestOverlap.aStart).join(' ');
-    const aSuffix = aWords.slice(bestOverlap.aStart + bestOverlap.totalLen).join(' ');
+    const aPrefix = hasCJK 
+      ? aWords.slice(0, bestOverlap.aStart).join('') 
+      : aWords.slice(0, bestOverlap.aStart).join(' ');
+    const aSuffix = hasCJK 
+      ? aWords.slice(bestOverlap.aStart + bestOverlap.totalLen).join('') 
+      : aWords.slice(bestOverlap.aStart + bestOverlap.totalLen).join(' ');
     
     let result = '';
-    if (aPrefix) result += aPrefix + ' ';
+    if (aPrefix) result += aPrefix + (hasCJK ? '' : ' ');
     result += b;
-    if (aSuffix) result += ' ' + aSuffix;
+    if (aSuffix) result += (hasCJK ? '' : ' ') + aSuffix;
     return result;
   }
 
   // Phương án dự phòng: nếu không tìm thấy khớp đáng kể, ghép nối tiếp thông thường
-  return a + ' ' + b;
+  return a + (hasCJK ? '' : ' ') + b;
 }
 
 /**
@@ -352,13 +358,11 @@ export default function useQuickConversation({
 
                   audio.onended = done;
                   audio.onerror = done;
-                  // Tính toán thời gian timeout an toàn động dựa trên độ dài của văn bản dịch (tối thiểu 15s, tối đa 120s)
-                  const timeoutMs = Math.min(120000, Math.max(15000, translatedText.length * 150));
+                  // Khởi tạo thời gian chờ an toàn tĩnh cực dài (5 phút) và không ngắt âm thanh khi kích hoạt
                   const safetyTimeout = setTimeout(() => {
-                    console.warn(`⚠️ [TTS Timeout] Force resolve phát âm sau ${timeoutMs}ms.`);
-                    try { audio.pause(); } catch (e) { /* ignore */ }
-                    done();
-                  }, timeoutMs);
+                    console.warn('⚠️ [TTS Timeout] Force resolve phát âm (5 phút).');
+                    done(); // Giải phóng trạng thái giao diện nhưng không gọi audio.pause() để cho phép âm thanh tiếp tục phát đến hết
+                  }, 300000);
 
                   // Áp dụng tốc độ phát giọng nói (Speech Rate)
                   try {
