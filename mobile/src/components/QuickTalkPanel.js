@@ -12,7 +12,10 @@ import {
   Switch,
   Platform,
   Vibration,
+  NativeModules,
+  AppState,
 } from 'react-native';
+const AndroidAecRecorder = NativeModules.AndroidAecRecorder || null;
 import { Audio } from 'expo-av';
 import { Feather } from '@expo/vector-icons';
 import Voice from '../services/speechRecognition';
@@ -120,6 +123,12 @@ export default function QuickTalkPanel({
   const muteSrcRef = useRef(muteSrc);
   const muteTgtRef = useRef(muteTgt);
 
+  const isResumingRef = useRef(false);
+  const appStateRef = useRef(AppState.currentState);
+  const isNativeTimerRunningRef = useRef(false);
+  const lastSpeechAtRef = useRef(0);
+  const isSpeakingRef = useRef(false);
+
   const scrollViewRef = useRef(null);
 
   micModeRef.current = micMode;
@@ -137,6 +146,15 @@ export default function QuickTalkPanel({
   useEffect(() => {
     isTtsPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      appStateRef.current = nextAppState;
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   // Load saved settings on mount
   useEffect(() => {
@@ -196,21 +214,154 @@ export default function QuickTalkPanel({
 
   const cleanupRecording = async () => {
     try {
+      clearSilenceTimer();
       setIsSpeechActive(false);
       await Voice.stop();
       await Voice.destroy();
     } catch (e) {}
   };
 
+  const clearSilenceTimer = () => {
+    console.log(`[🎙 Quick DEBUG] clearSilenceTimer: isNativeTimerRunning=${isNativeTimerRunningRef.current}, silenceTimer=${!!silenceTimerRef.current}`);
+    if (Platform.OS === 'android' && AndroidAecRecorder && isNativeTimerRunningRef.current) {
+      AndroidAecRecorder.cancelBackgroundTimer()
+        .catch((err) => {
+          console.warn('[🎙 Quick] cancelBackgroundTimer failed', err);
+        });
+      isNativeTimerRunningRef.current = false;
+    }
+    if (silenceTimerRef.current) {
+      clearInterval(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+  };
+
+  const startSilenceTimer = (langType) => {
+    console.log(`[🎙 Quick DEBUG] startSilenceTimer: silenceSeconds=${silenceSecondsRef.current}`);
+    clearSilenceTimer();
+    lastSpeechAtRef.current = Date.now();
+
+    const useNativeTimer = Platform.OS === 'android' && AndroidAecRecorder && appStateRef.current !== 'active';
+
+    if (useNativeTimer) {
+      console.log('[🎙 Quick DEBUG] startSilenceTimer: USING NATIVE TIMER');
+      isNativeTimerRunningRef.current = true;
+      
+      const checkIntervalMs = 500;
+      AndroidAecRecorder.startBackgroundTimer(checkIntervalMs)
+        .then(function handleTick(fired) {
+          if (fired) {
+            if (!isNativeTimerRunningRef.current) return;
+            
+            const elapsed = Date.now() - lastSpeechAtRef.current;
+            const limit = liveTextRef.current.trim() === ''
+              ? Math.max(6000, silenceSecondsRef.current * 1000 * 2)
+              : silenceSecondsRef.current * 1000;
+            
+            console.log(`[🎙 Quick DEBUG] Silence check (native): elapsed=${elapsed}ms, limit=${limit}ms, isRecording=${isRecordingRef.current}, liveText="${liveTextRef.current}"`);
+
+            if (
+              isProcessingRef.current ||
+              isTtsPlayingRef.current ||
+              (!isRecordingRef.current && !isResumingRef.current)
+            ) {
+              lastSpeechAtRef.current = Date.now();
+            } else if (elapsed >= limit) {
+              console.log(`[🎙 Quick DEBUG] Silence check (native) limit reached. stopRecognitionAndTranslate.`);
+              isNativeTimerRunningRef.current = false;
+              stopRecognitionAndTranslate(langType);
+              return;
+            }
+            
+            // Re-schedule native timer
+            AndroidAecRecorder.startBackgroundTimer(checkIntervalMs)
+              .then(handleTick)
+              .catch(() => {
+                isNativeTimerRunningRef.current = false;
+              });
+          }
+        })
+        .catch((err) => {
+          console.warn('[🎙 Quick] Native background check loop failed, fallback:', err);
+          isNativeTimerRunningRef.current = false;
+        });
+    } else {
+      console.log('[🎙 Quick DEBUG] startSilenceTimer: USING JS INTERVAL');
+      silenceTimerRef.current = setInterval(() => {
+        const elapsed = Date.now() - lastSpeechAtRef.current;
+        const limit = liveTextRef.current.trim() === ''
+          ? Math.max(6000, silenceSecondsRef.current * 1000 * 2)
+          : silenceSecondsRef.current * 1000;
+        
+        console.log(`[🎙 Quick DEBUG] Silence check (JS): elapsed=${elapsed}ms, limit=${limit}ms, isRecording=${isRecordingRef.current}, liveText="${liveTextRef.current}"`);
+
+        if (
+          isProcessingRef.current ||
+          isTtsPlayingRef.current ||
+          (!isRecordingRef.current && !isResumingRef.current)
+        ) {
+          lastSpeechAtRef.current = Date.now();
+          return;
+        }
+        
+        if (elapsed >= limit) {
+          console.log(`[🎙 Quick DEBUG] Silence check (JS) limit reached. stopRecognitionAndTranslate.`);
+          clearSilenceTimer();
+          stopRecognitionAndTranslate(langType);
+        }
+      }, 500);
+    }
+  };
+
+  const updateSpeechTimestamp = (langType) => {
+    console.log(`[🎙 Quick DEBUG] updateSpeechTimestamp called, micMode=${micModeRef.current}`);
+    lastSpeechAtRef.current = Date.now();
+    if (micModeRef.current !== 'hold' && !silenceTimerRef.current && !isNativeTimerRunningRef.current) {
+      startSilenceTimer(langType);
+    }
+  };
+
+  const triggerContinuousMicRestart = (langType, isResume = false) => {
+    console.log(`[🎙 Quick DEBUG] triggerContinuousMicRestart: langType=${langType}, isResume=${isResume}, isRecording=${isRecordingRef.current}`);
+    if (Platform.OS === 'android' && AndroidAecRecorder) {
+      AndroidAecRecorder.cancelBackgroundTimer()
+        .then(() => AndroidAecRecorder.startBackgroundTimer(500))
+        .then((fired) => {
+          console.log(`[🎙 Quick DEBUG] Android restart timer fired=${fired}, isRecording=${isRecordingRef.current}`);
+          if (fired && isRecordingRef.current) {
+            startRecordingLoop(langType || activeManualLangRef.current || 'src', isResume);
+          }
+        })
+        .catch((err) => {
+          console.warn('[🎙 Quick] Restart timer failed, starting immediately:', err);
+          if (isRecordingRef.current) {
+            startRecordingLoop(langType || activeManualLangRef.current || 'src', isResume);
+          }
+        });
+    } else {
+      setTimeout(() => {
+        console.log(`[🎙 Quick DEBUG] iOS/Fallback restart timeout fired, isRecording=${isRecordingRef.current}`);
+        if (isRecordingRef.current) {
+          startRecordingLoop(langType || activeManualLangRef.current || 'src', isResume);
+        }
+      }, 500);
+    }
+  };
+
   // Start Speech Capture (Universal for Click and Hold)
-  const startRecordingLoop = async (langType) => {
+  const startRecordingLoop = async (langType, isResume = false) => {
     if (Platform.OS === 'android') Vibration.vibrate([0, 100]);
-    if (isRecordingRef.current || isProcessing) return;
+    if (isRecordingRef.current && !isResume) return;
+    if (isProcessing) return;
+    if (isResume) {
+      isResumingRef.current = true;
+    }
 
     try {
       const permission = await Audio.requestPermissionsAsync();
       if (permission.status !== 'granted') {
         Alert.alert('Cập quyền', 'Vui lòng cấp quyền micro trong cài đặt để sử dụng.');
+        if (isResume) isResumingRef.current = false;
         return;
       }
 
@@ -219,35 +370,34 @@ export default function QuickTalkPanel({
         'Giao tiếp nhanh đang hoạt động ở chế độ nền.'
       );
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-        staysActiveInBackground: true,
-      });
 
+
+      isRecordingRef.current = false;
       // Reset any running instance
       try {
         await Voice.stop();
         await Voice.destroy();
       } catch (e) {}
 
-      setLiveText('');
-      liveTextRef.current = '';
-      accumulatedTextRef.current = '';
-      interimTextRef.current = '';
-      if (silenceTimerRef.current) {
-        clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = null;
-      }
-
-      // Configure Voice listeners dynamically before starting
-      Voice.onSpeechStart = () => {
+      if (!isResume) {
         setLiveText('');
         liveTextRef.current = '';
         accumulatedTextRef.current = '';
         interimTextRef.current = '';
+      }
+      if (!isResume) {
+        clearSilenceTimer();
+      }
+
+      // Configure Voice listeners dynamically before starting
+      Voice.onSpeechStart = () => {
+        if (!isResumingRef.current) {
+          setLiveText('');
+          liveTextRef.current = '';
+          accumulatedTextRef.current = '';
+          interimTextRef.current = '';
+        }
+        isResumingRef.current = false;
         setIsSpeechActive(true);
       };
 
@@ -258,12 +408,7 @@ export default function QuickTalkPanel({
           liveTextRef.current = accumulatedTextRef.current;
           setLiveText(accumulatedTextRef.current);
           
-          if (micModeRef.current === 'click') {
-            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-            silenceTimerRef.current = setTimeout(() => {
-              stopRecognitionAndTranslate(langType);
-            }, silenceSecondsRef.current * 1000);
-          }
+          updateSpeechTimestamp(langType);
         }
       };
 
@@ -274,12 +419,7 @@ export default function QuickTalkPanel({
           liveTextRef.current = fullText;
           setLiveText(fullText);
 
-          if (micModeRef.current === 'click') {
-            if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-            silenceTimerRef.current = setTimeout(() => {
-              stopRecognitionAndTranslate(langType);
-            }, silenceSecondsRef.current * 1000);
-          }
+          updateSpeechTimestamp(langType);
         }
       };
 
@@ -288,26 +428,33 @@ export default function QuickTalkPanel({
         setIsSpeechActive(false);
       };
 
+      isSpeakingRef.current = false;
+
+      Voice.onSpeechRecognized = () => {
+        console.log('[🎙 Quick DEBUG] Voice.onSpeechRecognized (speechstart)');
+        isSpeakingRef.current = true;
+        lastSpeechAtRef.current = Date.now();
+      };
+
+      Voice.onSpeechEnd = () => {
+        console.log('[🎙 Quick DEBUG] Voice.onSpeechEnd (speechend)');
+        isSpeakingRef.current = false;
+        lastSpeechAtRef.current = Date.now();
+      };
+
       Voice.onRecognitionEnd = () => {
+        console.log(`[🎙 Quick DEBUG] Voice.onRecognitionEnd: isRecordingRef=${isRecordingRef.current}, activeManualLangRef=${activeManualLangRef.current}`);
         setIsSpeechActive(false);
 
         // If the session ended naturally/unexpectedly while we are still supposed to be recording
         if (
           activeManualLangRef.current &&
+          isRecordingRef.current &&
           !isProcessingRef.current &&
           !isTtsPlayingRef.current
         ) {
-          const textToTranslate = liveTextRef.current;
-          if (textToTranslate && textToTranslate.trim()) {
-            console.log('[🎙 Quick] Recognition ended naturally with text. Translating...');
-            isRecordingRef.current = true; // Keep true so stopRecognitionAndTranslate doesn't bail out
-            stopRecognitionAndTranslate(langType);
-          } else {
-            console.log('[🎙 Quick] Recognition ended naturally with no text. Resetting states.');
-            isRecordingRef.current = false;
-            setActiveManualLang(null);
-            stopBackgroundService();
-          }
+          isRecordingRef.current = true; // Keep true
+          triggerContinuousMicRestart(langType, true); // isResume = true
         } else {
           isRecordingRef.current = false;
         }
@@ -325,13 +472,23 @@ export default function QuickTalkPanel({
       isRecordingRef.current = true;
       setActiveManualLang(langType);
       
+      isResumingRef.current = !!isResume;
+      console.log(`[🎙 Quick DEBUG] startRecordingLoop calling Voice.start, locale=${speechLocale}, isResume=${isResume}`);
       await Voice.start(speechLocale, {
         continuous: true, // Luôn thu âm liên tục để tránh tự động ngắt mic khi người dùng tạm nghỉ nói ở chế độ nhấn giữ (Hold)
+        volumeChangeEventOptions: {
+          enabled: true,
+        },
       });
+      console.log('[🎙 Quick DEBUG] Voice.start successfully resolved');
+      if (micModeRef.current !== 'hold') {
+        startSilenceTimer(langType);
+      }
     } catch (err) {
       console.error('Failed to start Voice recording:', err);
       setActiveManualLang(null);
       isRecordingRef.current = false;
+      isResumingRef.current = false;
     }
   };
 
@@ -352,10 +509,7 @@ export default function QuickTalkPanel({
     if (Platform.OS === 'android') Vibration.vibrate([0, 100]);
     const stopDelayMs = options.stopDelayMs || 0;
 
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
+    clearSilenceTimer();
 
     if (!isRecordingRef.current) return;
     isRecordingRef.current = false;

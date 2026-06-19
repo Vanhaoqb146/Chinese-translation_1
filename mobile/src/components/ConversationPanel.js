@@ -166,6 +166,7 @@ export default function ConversationPanel({
   const silenceTimerRef = useRef(null);
 
   const clearSilenceTimer = () => {
+    console.log(`[🎙 Conv DEBUG] clearSilenceTimer: isNativeTimerRunning=${isNativeTimerRunningRef.current}, silenceTimer=${!!silenceTimerRef.current}`);
     if (Platform.OS === 'android' && AndroidAecRecorder && isNativeTimerRunningRef.current) {
       AndroidAecRecorder.cancelBackgroundTimer()
         .catch((err) => {
@@ -180,12 +181,14 @@ export default function ConversationPanel({
   };
 
   const startSilenceTimer = (langType) => {
+    console.log(`[🎙 Conv DEBUG] startSilenceTimer: silenceSeconds=${silenceSecondsRef.current}`);
     clearSilenceTimer();
     lastSpeechAtRef.current = Date.now();
 
     const useNativeTimer = Platform.OS === 'android' && AndroidAecRecorder && appStateRef.current !== 'active';
 
     if (useNativeTimer) {
+      console.log('[🎙 Conv DEBUG] startSilenceTimer: USING NATIVE TIMER');
       isNativeTimerRunningRef.current = true;
       
       const checkIntervalMs = 500;
@@ -195,17 +198,21 @@ export default function ConversationPanel({
             if (!isNativeTimerRunningRef.current) return;
             
             const elapsed = Date.now() - lastSpeechAtRef.current;
-            const limit = silenceSecondsRef.current * 1000;
+            const limit = liveTextRef.current.trim() === ''
+              ? Math.max(6000, silenceSecondsRef.current * 1000 * 2)
+              : silenceSecondsRef.current * 1000;
             
+            console.log(`[🎙 Conv DEBUG] Silence check (native): elapsed=${elapsed}ms, limit=${limit}ms, isRecording=${isRecordingRef.current}, liveText="${liveTextRef.current}"`);
+
             if (
               voiceInputSuppressedRef.current ||
               isProcessingRef.current ||
               isTtsPlayingRef.current ||
-              !isRecordingRef.current ||
-              isSpeakingRef.current
+              (!isRecordingRef.current && !isResumingRef.current)
             ) {
               lastSpeechAtRef.current = Date.now();
             } else if (elapsed >= limit) {
+              console.log(`[🎙 Conv DEBUG] Silence check (native) limit reached. stopRecognitionAndTranslate.`);
               isNativeTimerRunningRef.current = false;
               stopRecognitionAndTranslate(langType);
               return;
@@ -224,22 +231,27 @@ export default function ConversationPanel({
           isNativeTimerRunningRef.current = false;
         });
     } else {
+      console.log('[🎙 Conv DEBUG] startSilenceTimer: USING JS INTERVAL');
       silenceTimerRef.current = setInterval(() => {
+        const elapsed = Date.now() - lastSpeechAtRef.current;
+        const limit = liveTextRef.current.trim() === ''
+          ? Math.max(6000, silenceSecondsRef.current * 1000 * 2)
+          : silenceSecondsRef.current * 1000;
+        
+        console.log(`[🎙 Conv DEBUG] Silence check (JS): elapsed=${elapsed}ms, limit=${limit}ms, isRecording=${isRecordingRef.current}, liveText="${liveTextRef.current}"`);
+
         if (
           voiceInputSuppressedRef.current ||
           isProcessingRef.current ||
           isTtsPlayingRef.current ||
-          !isRecordingRef.current ||
-          isSpeakingRef.current
+          (!isRecordingRef.current && !isResumingRef.current)
         ) {
           lastSpeechAtRef.current = Date.now();
           return;
         }
         
-        const elapsed = Date.now() - lastSpeechAtRef.current;
-        const limit = silenceSecondsRef.current * 1000;
-        
         if (elapsed >= limit) {
+          console.log(`[🎙 Conv DEBUG] Silence check (JS) limit reached. stopRecognitionAndTranslate.`);
           clearSilenceTimer();
           stopRecognitionAndTranslate(langType);
         }
@@ -248,6 +260,7 @@ export default function ConversationPanel({
   };
 
   const updateSpeechTimestamp = (langType) => {
+    console.log(`[🎙 Conv DEBUG] updateSpeechTimestamp called, micMode=${micModeRef.current}`);
     lastSpeechAtRef.current = Date.now();
     if (micModeRef.current !== 'hold' && !silenceTimerRef.current && !isNativeTimerRunningRef.current) {
       startSilenceTimer(langType);
@@ -255,10 +268,12 @@ export default function ConversationPanel({
   };
 
   const triggerContinuousMicRestart = (langType, isResume = false) => {
+    console.log(`[🎙 Conv DEBUG] triggerContinuousMicRestart: langType=${langType}, isResume=${isResume}, isRecording=${isRecordingRef.current}, isManualRecording=${isManualRecordingRef.current}`);
     if (Platform.OS === 'android' && AndroidAecRecorder) {
       AndroidAecRecorder.cancelBackgroundTimer()
         .then(() => AndroidAecRecorder.startBackgroundTimer(500))
         .then((fired) => {
+          console.log(`[🎙 Conv DEBUG] Android restart timer fired=${fired}, isManualRecording=${isManualRecordingRef.current}`);
           if (fired && isManualRecordingRef.current) {
             if (autoDetect) {
               if (!autoListeningWantedRef.current) return;
@@ -276,6 +291,7 @@ export default function ConversationPanel({
         });
     } else {
       setTimeout(() => {
+        console.log(`[🎙 Conv DEBUG] iOS/Fallback restart timeout fired, isManualRecording=${isManualRecordingRef.current}`);
         if (isManualRecordingRef.current) {
           if (autoDetect) {
             if (!autoListeningWantedRef.current) return;
@@ -293,6 +309,9 @@ export default function ConversationPanel({
       voiceInputSuppressedRef.current = false;
       if (isRecordingRef.current) {
         setIsSpeechActive(true);
+        if (micModeRef.current !== 'hold') {
+          startSilenceTimer(langType);
+        }
       } else {
         triggerContinuousMicRestart(langType);
       }
@@ -587,6 +606,9 @@ export default function ConversationPanel({
 
   // Start Speech Capture (Universal for Click, Hold, and Continuous)
   const startRecordingLoop = async (langType, isResume = false) => {
+    if (isResume) {
+      isResumingRef.current = true;
+    }
     try {
       if (autoDetect && langType === 'auto' && !autoListeningWantedRef.current) {
         return;
@@ -596,6 +618,7 @@ export default function ConversationPanel({
       if (permission.status !== 'granted') {
         setIsManualRecording(false);
         Alert.alert('Cập quyền', 'Vui lòng cấp quyền micro trong cài đặt để sử dụng.');
+        if (isResume) isResumingRef.current = false;
         return;
       }
 
@@ -606,13 +629,7 @@ export default function ConversationPanel({
         );
       }
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
-        staysActiveInBackground: true,
-      });
+
 
       isRecordingRef.current = false;
       // Clear any running instance
@@ -712,16 +729,19 @@ export default function ConversationPanel({
       isSpeakingRef.current = false;
 
       Voice.onSpeechRecognized = () => {
+        console.log('[🎙 Conv DEBUG] Voice.onSpeechRecognized (speechstart)');
         isSpeakingRef.current = true;
         lastSpeechAtRef.current = Date.now();
       };
 
       Voice.onSpeechEnd = () => {
+        console.log('[🎙 Conv DEBUG] Voice.onSpeechEnd (speechend)');
         isSpeakingRef.current = false;
         lastSpeechAtRef.current = Date.now();
       };
 
       Voice.onRecognitionEnd = () => {
+        console.log(`[🎙 Conv DEBUG] Voice.onRecognitionEnd: isRecordingRef=${isRecordingRef.current}, isManualRecordingRef=${isManualRecordingRef.current}`);
         setIsSpeechActive(false);
 
         // If the session ended naturally/unexpectedly while we are still supposed to be recording
@@ -758,9 +778,11 @@ export default function ConversationPanel({
       setActiveManualLang(langType);
       
       isResumingRef.current = !!isResume;
+      console.log(`[🎙 Conv DEBUG] startRecordingLoop calling Voice.start, locale=${speechLocale}, isResume=${isResume}`);
       await Voice.start(speechLocale, recognitionOptions);
-      if (isResume && liveTextRef.current && liveTextRef.current.trim()) {
-        updateSpeechTimestamp(langType);
+      console.log('[🎙 Conv DEBUG] Voice.start successfully resolved');
+      if (micModeRef.current !== 'hold') {
+        startSilenceTimer(langType);
       }
     } catch (err) {
       console.error('Failed to start recording loop:', err);
@@ -769,6 +791,7 @@ export default function ConversationPanel({
       setIsManualRecording(false);
       setActiveManualLang(null);
       isRecordingRef.current = false;
+      isResumingRef.current = false;
     }
   };
 

@@ -195,6 +195,7 @@ export default function App() {
   const [sessionChatLogs, setSessionChatLogs] = useState(createEmptySessionChatLogs);
 
   const ttsPlayerRef = useRef(null);
+  const ttsSessionIdRef = useRef(0);
   const recordingRef = useRef(null);
   const isRecordingRef = useRef(false);
   const historyRequestRef = useRef(null);
@@ -209,6 +210,14 @@ export default function App() {
   useEffect(() => {
     async function loadSession() {
       try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+          staysActiveInBackground: true,
+        });
+
         const savedUser = await api.getSavedUser();
         if (savedUser) setUser(savedUser);
 
@@ -562,12 +571,17 @@ export default function App() {
 
   // TTS: Fetch and Play Speech synthesis with dynamic options (provider, speed)
   const playTts = async (text, lang, voice, options = {}) => {
+    const sessionId = ++ttsSessionIdRef.current;
     try {
       await stopAudio();
 
       const { provider = 'azure', speed = 1.0 } = options;
       const audioSource = await api.getTtsAudioSource({ text, lang, voice, provider });
       
+      if (sessionId !== ttsSessionIdRef.current) {
+        return;
+      }
+
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true, // Keep it true so it doesn't break recording permissions state
         playsInSilentModeIOS: true,
@@ -576,25 +590,25 @@ export default function App() {
         staysActiveInBackground: true,
       });
 
-      const { sound: newSound } = await Audio.Sound.createAsync(
-        audioSource,
-        { shouldPlay: true }
-      );
-      ttsPlayerRef.current = newSound;
-
-      // Set playback speed rate if not default
-      if (speed !== 1.0) {
-        try {
-          await newSound.setRateAsync(speed, true);
-        } catch (e) {
-          console.warn('Failed to set sound rate', e);
-        }
+      let newSound = null;
+      try {
+        const { sound } = await Audio.Sound.createAsync(
+          audioSource,
+          { shouldPlay: false }
+        );
+        newSound = sound;
+      } catch (loadError) {
+        console.warn('[🔊 TTS] Failed to create sound:', loadError);
+        throw loadError;
       }
 
-      setSound(newSound);
-      setIsPlaying(true);
+      if (sessionId !== ttsSessionIdRef.current) {
+        console.log(`[🔊 TTS] Session ${sessionId} superseded by ${ttsSessionIdRef.current}. Unloading sound.`);
+        await newSound.unloadAsync();
+        return;
+      }
 
-      newSound.setOnPlaybackStatusUpdate(async (status) => {
+      const handleStatusUpdate = async (status) => {
         if (!status?.isLoaded) {
           if (ttsPlayerRef.current === newSound) {
             ttsPlayerRef.current = null;
@@ -606,6 +620,25 @@ export default function App() {
             if (options.onPlaybackFinished) {
               try { options.onPlaybackFinished(); } catch (e) {}
             }
+          }
+          return;
+        }
+
+        if (status.error) {
+          console.warn('[🔊 TTS] Playback status error:', status.error);
+          setIsPlaying(false);
+          if (ttsPlayerRef.current === newSound) {
+            ttsPlayerRef.current = null;
+          }
+          try {
+            await newSound.unloadAsync();
+          } catch (e) {}
+          setSound(null);
+          if (viewMode === 'standard') {
+            await stopBackgroundService();
+          }
+          if (options.onPlaybackFinished) {
+            try { options.onPlaybackFinished(); } catch (e) {}
           }
           return;
         }
@@ -626,12 +659,32 @@ export default function App() {
             try { options.onPlaybackFinished(); } catch (e) {}
           }
         }
-      });
+      };
+
+      try {
+        ttsPlayerRef.current = newSound;
+        setSound(newSound);
+        setIsPlaying(true);
+
+        if (speed !== 1.0) {
+          await newSound.setRateAsync(speed, true);
+        }
+
+        newSound.setOnPlaybackStatusUpdate(handleStatusUpdate);
+
+        await newSound.playAsync();
+      } catch (configError) {
+        console.warn('[🔊 TTS] Configuration/playback error:', configError);
+        if (newSound) {
+          try { await newSound.unloadAsync(); } catch (e) {}
+        }
+        ttsPlayerRef.current = null;
+        setSound(null);
+        setIsPlaying(false);
+        throw configError;
+      }
     } catch (error) {
-      console.warn('TTS playback error:', error);
-      ttsPlayerRef.current = null;
-      setSound(null);
-      setIsPlaying(false);
+      console.warn('[🔊 TTS] playTts general error:', error);
       if (viewMode === 'standard') {
         await stopBackgroundService();
       }

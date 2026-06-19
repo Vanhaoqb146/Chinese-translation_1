@@ -42,6 +42,59 @@ function detectLangFromText(text, srcLang = 'zh', tgtLang = 'vi') {
   return null;
 }
 
+// ====== [DEDUP] Phát hiện và loại bỏ đoạn text bị lặp lại liên tiếp ======
+// Xử lý trường hợp Azure SDK fire trùng recognized events khi WebSocket reconnect
+function removeDuplicateSegments(text) {
+  if (!text || text.length < 40) return text;
+
+  // Tách thành các câu theo dấu câu (hỗ trợ cả CJK 。！？)
+  const sentences = text.split(/(?<=[.。!！?？])\ */);
+  if (sentences.length <= 1) return text;
+
+  const kept = [];
+  const seenNorm = [];
+
+  for (const raw of sentences) {
+    const s = raw.trim();
+    if (!s) continue;
+    const norm = s.toLowerCase();
+
+    // Trùng exact → bỏ
+    if (seenNorm.includes(norm)) {
+      console.warn(`🔄 [TextDedup] Bỏ câu trùng exact: "${s.slice(0, 60)}..."`);
+      continue;
+    }
+
+    // Trùng gần đúng: câu mới là substring dài (>80%) của một câu đã seen
+    let isDup = false;
+    for (const prev of seenNorm) {
+      if (prev.length > 20 && norm.length > 20) {
+        if (prev.includes(norm) && norm.length / prev.length > 0.8) {
+          isDup = true;
+          break;
+        }
+        if (norm.includes(prev) && prev.length / norm.length > 0.8) {
+          isDup = true;
+          break;
+        }
+      }
+    }
+    if (isDup) {
+      console.warn(`🔄 [TextDedup] Bỏ câu tương tự: "${s.slice(0, 60)}..."`);
+      continue;
+    }
+
+    seenNorm.push(norm);
+    kept.push(s);
+  }
+
+  const result = kept.join(' ');
+  if (result.length < text.length) {
+    console.log(`🔄 [TextDedup] Đã loại bỏ ${text.length - result.length} ký tự trùng lặp`);
+  }
+  return result;
+}
+
 export default function useRealtimeConversation({
   srcLangCode,
   tgtLangCode,
@@ -89,6 +142,7 @@ export default function useRealtimeConversation({
   const prevSessionsTextRef = useRef('');
   const silenceTimeoutRef = useRef(null);
   const stoppingRef = useRef(false); // Cờ chặn tin nhắn WebSocket muộn khi bấm dừng
+  const lastRecognizedSegmentsRef = useRef([]); // [DEDUP] Lưu các segment đã recognized để phát hiện trùng
 
   const conversationHistoryRef = useRef([]);
   const msgIdRef = useRef(Date.now());
@@ -261,6 +315,56 @@ export default function useRealtimeConversation({
           }
         } catch (e) { console.warn('⚠️ [Auto-detect final]', e); }
       }
+
+      // ===== [DEDUP] Phát hiện Azure fire trùng recognized event =====
+      const trimmedSeg = transcript.trim();
+      const prevSegs = lastRecognizedSegmentsRef.current;
+
+      // Check 1: Trùng EXACT với segment cuối → bỏ qua
+      if (prevSegs.length > 0 && prevSegs[prevSegs.length - 1] === trimmedSeg) {
+        console.warn(`🔄 [Dedup] Bỏ recognized trùng exact: "${trimmedSeg.slice(0, 60)}..."`);
+        resetSilenceTimer();
+        return;
+      }
+
+      // Check 2: Segment mới đã nằm trọn trong accumulated text → bỏ qua
+      if (accumulatedTextRef.current && trimmedSeg.length > 10 &&
+          accumulatedTextRef.current.includes(trimmedSeg)) {
+        console.warn(`🔄 [Dedup] Bỏ recognized đã có trong accumulated: "${trimmedSeg.slice(0, 60)}..."`);
+        resetSilenceTimer();
+        return;
+      }
+
+      // Check 3: Overlap lớn giữa đuôi accumulated và đầu segment mới (>70%)
+      if (accumulatedTextRef.current && trimmedSeg.length > 20) {
+        const accLower = accumulatedTextRef.current.toLowerCase();
+        const segLower = trimmedSeg.toLowerCase();
+        const maxCheck = Math.min(accLower.length, segLower.length);
+        let overlapLen = 0;
+        for (let len = maxCheck; len >= 10; len--) {
+          if (accLower.endsWith(segLower.substring(0, len))) {
+            overlapLen = len;
+            break;
+          }
+        }
+        if (overlapLen > 0 && overlapLen / segLower.length > 0.7) {
+          const newPart = trimmedSeg.substring(overlapLen).trim();
+          console.warn(`🔄 [Dedup] Overlap ${Math.round(overlapLen / segLower.length * 100)}% — chỉ giữ phần mới: "${(newPart || '(trống)').slice(0, 50)}"`);
+          if (newPart) {
+            accumulatedTextRef.current += ' ' + newPart;
+          }
+          prevSegs.push(trimmedSeg);
+          if (prevSegs.length > 10) prevSegs.shift();
+          currentInterimRef.current = '';
+          if (onInterimTextRef.current) onInterimTextRef.current(accumulatedTextRef.current);
+          resetSilenceTimer();
+          return;
+        }
+      }
+
+      // Segment hợp lệ — ghi nhận và append bình thường
+      prevSegs.push(trimmedSeg);
+      if (prevSegs.length > 10) prevSegs.shift();
 
       console.log(`📝 FINAL: "${transcript}"`);
       accumulatedTextRef.current += (accumulatedTextRef.current ? ' ' : '') + transcript;
@@ -580,6 +684,9 @@ export default function useRealtimeConversation({
     }
     if (!text) return;
 
+    // [DEDUP] Loại bỏ các câu bị lặp trong accumulated text trước khi dịch
+    text = removeDuplicateSegments(text);
+
     // Lọc bỏ từ ừm, à, ờ dư thừa ở cuối hoặc đứng độc lập do tiếng thở/nhiễu
     text = text.replace(/(?<=^|\s|[.,!?])(ừm|ờ|à|ơi|ơ)(?=\s|[.,!?]|$)/gi, '');
     text = text.replace(/\b(uh|um|er|erm)\b/gi, '');
@@ -885,6 +992,7 @@ export default function useRealtimeConversation({
     // Dọn dẹp + tạo recognizer MỚI để resume
     accumulatedTextRef.current = '';
     currentInterimRef.current = '';
+    lastRecognizedSegmentsRef.current = []; // [DEDUP] Reset dedup state
     isSpeakingRef.current = false;
     if (onInterimTextRef.current) onInterimTextRef.current('');
 
@@ -938,6 +1046,7 @@ export default function useRealtimeConversation({
       accumulatedTextRef.current = '';
       currentInterimRef.current = '';
       prevSessionsTextRef.current = '';
+      lastRecognizedSegmentsRef.current = []; // [DEDUP] Reset dedup state
       isSpeakingRef.current = false;
       stoppingRef.current = false; // Reset cờ dừng khi bắt đầu phiên mới
       inputLangRef.current = inputLang;
