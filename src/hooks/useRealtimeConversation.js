@@ -111,6 +111,7 @@ export default function useRealtimeConversation({
   onStatusChange,
   onError,
   getVoiceForLang,
+  context = '',
 }) {
   const [isListening, setIsListening] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -163,6 +164,7 @@ export default function useRealtimeConversation({
   const providerRef = useRef(provider);
   const ttsProviderRef = useRef(ttsProvider);
   const speedRef = useRef(speed);
+  const contextRef = useRef(context);
 
   // Update refs synchronously during render to completely bypass React scheduling lags
   srcLangCodeRef.current = srcLangCode;
@@ -180,6 +182,7 @@ export default function useRealtimeConversation({
   providerRef.current = provider;
   ttsProviderRef.current = ttsProvider;
   speedRef.current = speed;
+  contextRef.current = context;
 
   // Reuse one HTMLAudioElement to avoid iOS Safari blocking autoplay on new audio elements.
   const getOrCreateTtsAudio = useCallback(() => {
@@ -825,6 +828,7 @@ export default function useRealtimeConversation({
           engine: engineRef.current,
           history: conversationHistoryRef.current,
           stream: true,
+          context: contextRef.current || '',
         }),
         signal: AbortSignal.timeout(25000),
       });

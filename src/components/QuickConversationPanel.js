@@ -72,6 +72,7 @@ export default function QuickConversationPanel({
   history,
   setHistory,
   sessionUser,
+  context = '',
 }) {
   const getSessionValue = (key, defaultValue) => {
     if (typeof window !== 'undefined') {
@@ -212,6 +213,7 @@ export default function QuickConversationPanel({
     onStatusChange: handleStatusChange,
     onError: handleError,
     getVoiceForLang,
+    context,
   });
 
   const stopReplay = useCallback(() => {

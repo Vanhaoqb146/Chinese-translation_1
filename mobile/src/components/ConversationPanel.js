@@ -201,8 +201,9 @@ export default function ConversationPanel({
             const limit = liveTextRef.current.trim() === ''
               ? Math.max(6000, silenceSecondsRef.current * 1000 * 2)
               : silenceSecondsRef.current * 1000;
+            const maxDeferralMs = 2000;
             
-            console.log(`[🎙 Conv DEBUG] Silence check (native): elapsed=${elapsed}ms, limit=${limit}ms, isRecording=${isRecordingRef.current}, liveText="${liveTextRef.current}"`);
+            console.log(`[🎙 Conv DEBUG] Silence check (native): elapsed=${elapsed}ms, limit=${limit}ms, isRecording=${isRecordingRef.current}, isSpeaking=${isSpeakingRef.current}, isResuming=${isResumingRef.current}, liveText="${liveTextRef.current}"`);
 
             if (
               voiceInputSuppressedRef.current ||
@@ -211,6 +212,8 @@ export default function ConversationPanel({
               (!isRecordingRef.current && !isResumingRef.current)
             ) {
               lastSpeechAtRef.current = Date.now();
+            } else if (isSpeakingRef.current && elapsed < limit + maxDeferralMs) {
+              // Hoãn check nhưng không reset bộ đếm im lặng để tránh tiếng ồn/tiếng thở ngắn phá hỏng timer, hoãn tối đa 2.0s
             } else if (elapsed >= limit) {
               console.log(`[🎙 Conv DEBUG] Silence check (native) limit reached. stopRecognitionAndTranslate.`);
               isNativeTimerRunningRef.current = false;
@@ -237,8 +240,9 @@ export default function ConversationPanel({
         const limit = liveTextRef.current.trim() === ''
           ? Math.max(6000, silenceSecondsRef.current * 1000 * 2)
           : silenceSecondsRef.current * 1000;
+        const maxDeferralMs = 2000;
         
-        console.log(`[🎙 Conv DEBUG] Silence check (JS): elapsed=${elapsed}ms, limit=${limit}ms, isRecording=${isRecordingRef.current}, liveText="${liveTextRef.current}"`);
+        console.log(`[🎙 Conv DEBUG] Silence check (JS): elapsed=${elapsed}ms, limit=${limit}ms, isRecording=${isRecordingRef.current}, isSpeaking=${isSpeakingRef.current}, isResuming=${isResumingRef.current}, liveText="${liveTextRef.current}"`);
 
         if (
           voiceInputSuppressedRef.current ||
@@ -247,6 +251,11 @@ export default function ConversationPanel({
           (!isRecordingRef.current && !isResumingRef.current)
         ) {
           lastSpeechAtRef.current = Date.now();
+          return;
+        }
+
+        if (isSpeakingRef.current && elapsed < limit + maxDeferralMs) {
+          // Hoãn check nhưng không reset bộ đếm im lặng để tránh tiếng ồn/tiếng thở ngắn phá hỏng timer, hoãn tối đa 2.0s
           return;
         }
         

@@ -29,6 +29,7 @@ export default function useManualConversation({
   onTranscribed,
   onResult,
   onError,
+  context = '',
 }) {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -100,6 +101,7 @@ export default function useManualConversation({
           apiKey,
           engine: engine || 'openai',
           history: conversationHistoryRef.current,
+          context: context || '',
         }),
       });
 

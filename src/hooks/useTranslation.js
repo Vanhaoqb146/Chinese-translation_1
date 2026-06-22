@@ -18,7 +18,8 @@ export default function useTranslation() {
         targetLang,
         apiKey: settings.apiKey || '',
         engine: settings.engine || 'openai',
-        history // Truyền history vào API
+        history, // Truyền history vào API
+        context: settings.context || '', // Truyền context vào API
       }),
     });
 

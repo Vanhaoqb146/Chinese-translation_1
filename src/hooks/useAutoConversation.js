@@ -38,7 +38,7 @@ const exportWAV = (preRollBuffers, recordingBuffers, sampleRate) => {
   return new Blob([view], { type: 'audio/wav' });
 };
 
-export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLangCode, onTranscribed, onResult, onTranslating, onError, onLangDetected }) {
+export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLangCode, onTranscribed, onResult, onTranslating, onError, onLangDetected, context = '' }) {
   const [isListening, setIsListening] = useState(false);
   const [elapsed, setElapsed] = useState(0);
 
@@ -64,6 +64,11 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
   const conversationHistoryRef = useRef([]);
   const smoothedRmsRef = useRef(0); // [EMA] San mượt tín hiệu tránh nhiễu frame-by-frame
   const processAudioChunkRef = useRef(null); // [REF] Giữ reference ổn định cho stop()
+  const contextRef = useRef(context);
+
+  useEffect(() => {
+    contextRef.current = context;
+  }, [context]);
 
   const processAudioChunk = useCallback(async (audioBlob) => {
     processingCountRef.current += 1;
@@ -112,7 +117,15 @@ export default function useAutoConversation({ apiKey, engine, srcLangCode, tgtLa
 
       const translateRes = await fetch('/api/translate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, sourceLang: fromLang, targetLang: toLang, apiKey, engine: engine || 'openai', history: conversationHistoryRef.current }),
+        body: JSON.stringify({
+          text,
+          sourceLang: fromLang,
+          targetLang: toLang,
+          apiKey,
+          engine: engine || 'openai',
+          history: conversationHistoryRef.current,
+          context: contextRef.current || '',
+        }),
       });
 
       const translateData = await translateRes.json();

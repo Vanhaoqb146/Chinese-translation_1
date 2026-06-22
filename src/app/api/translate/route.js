@@ -124,8 +124,8 @@ export async function POST(request) {
     if (limit.response) return limit.response;
 
     const body = await request.json();
-    // BỔ SUNG: Nhận thêm mảng history từ frontend
-    const { text, sourceLang, targetLang, engine, history = [] } = body;
+    // BỔ SUNG: Nhận thêm mảng history và context từ frontend
+    const { text, sourceLang, targetLang, engine, history = [], context = '' } = body;
     const cfg = getProviderConfig(engine, body.apiKey || '');
     console.log(`[Translate][${requestId}] started source=${sourceLang} target=${targetLang} model=${cfg.model} chars=${typeof text === 'string' ? text.length : 0}`);
 
@@ -155,9 +155,13 @@ export async function POST(request) {
     if (cfg.apiKey) {
       // [FIX BUG 2] STRICT TRANSLATION-ONLY SYSTEM PROMPT
       // Sử dụng tiếng Anh, cực kỳ rõ ràng, cấm GPT trả lời câu hỏi hoặc nói chuyện
-      const systemPrompt = `You are a professional, direct translation engine. Your ONLY task is to translate text from ${sourceName} to ${targetName}.
+      let systemPrompt = `You are a professional, direct translation engine. Your ONLY task is to translate text from ${sourceName} to ${targetName}.`;
 
-ABSOLUTE RULES — NEVER BREAK THESE:
+      if (context && typeof context === 'string' && context.trim()) {
+        systemPrompt += `\n\nTRANSLATION CONTEXT / BACKGROUND:\nUse the following user-provided context to guide terminology, tone, and domain-specific vocabulary (e.g., industry jargon, formal/informal style):\n"${context.trim()}"`;
+      }
+
+      systemPrompt += `\n\nABSOLUTE RULES — NEVER BREAK THESE:
 1. ONLY output the translated text. Nothing else.
 2. NEVER answer questions. If the input is a question, TRANSLATE the question. Do NOT answer it.
 3. NEVER continue a conversation. NEVER add greetings, farewells, or conversational filler.
@@ -329,10 +333,14 @@ REMEMBER: You are a TRANSLATION ENGINE, not a chatbot. Your output must ALWAYS b
             `[Translate Guard] Output did not look like ${targetLang}; requesting a repair pass.`
           );
 
+          let repairSystemPrompt = `You are a strict translation repair engine. Translate from ${sourceName} to ${targetName}. Output ONLY ${targetName} text, with no notes.`;
+          if (context && typeof context === 'string' && context.trim()) {
+            repairSystemPrompt += `\n\nTRANSLATION CONTEXT / BACKGROUND:\nUse the following user-provided context to guide terminology, tone, and domain-specific vocabulary:\n"${context.trim()}"`;
+          }
           const repairMessages = [
             {
               role: 'system',
-              content: `You are a strict translation repair engine. Translate from ${sourceName} to ${targetName}. Output ONLY ${targetName} text, with no notes.`,
+              content: repairSystemPrompt,
             },
             {
               role: 'user',

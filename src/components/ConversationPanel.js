@@ -76,6 +76,7 @@ export default function ConversationPanel({
   history,
   setHistory,
   sessionUser,
+  context = '',
 }) {
   const getSessionValue = (key, defaultValue) => {
     if (typeof window !== 'undefined') {
@@ -238,6 +239,7 @@ export default function ConversationPanel({
     onStatusChange: handleStatusChange,
     onError: handleError,
     getVoiceForLang,
+    context,
   });
 
   // Dừng replay

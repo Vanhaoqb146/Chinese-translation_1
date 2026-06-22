@@ -88,6 +88,7 @@ export default function useSimultaneousConversation({
   onStatusChange,
   onError,
   getVoiceForLang,
+  context = '',
 }) {
   const [isListening, setIsListening] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -157,6 +158,7 @@ export default function useSimultaneousConversation({
   const useHeadphonesRef = useRef(useHeadphones);
   const speedRef = useRef(speed);
   const echoCancellationAIRef = useRef(echoCancellationAI);
+  const contextRef = useRef(context);
 
   // Update refs synchronously during render to completely bypass React scheduling lags
   srcLangCodeRef.current = srcLangCode;
@@ -177,6 +179,7 @@ export default function useSimultaneousConversation({
   useHeadphonesRef.current = useHeadphones;
   speedRef.current = speed;
   echoCancellationAIRef.current = echoCancellationAI;
+  contextRef.current = context;
 
   const getOrCreateTtsAudio = useCallback(() => {
     if (typeof window === 'undefined') return null;
@@ -910,6 +913,7 @@ export default function useSimultaneousConversation({
           engine: engineRef.current,
           history: conversationHistoryRef.current,
           stream: true,
+          context: contextRef.current || '',
         }),
         signal: AbortSignal.timeout(25000),
       });

@@ -70,6 +70,7 @@ export default function SimultaneousPanel({
   history,
   setHistory,
   sessionUser,
+  context = '',
 }) {
   const getSessionValue = (key, defaultValue) => {
     if (typeof window !== "undefined") {
@@ -344,6 +345,7 @@ export default function SimultaneousPanel({
     onStatusChange: handleStatusChange,
     onError: handleError,
     getVoiceForLang,
+    context,
   });
 
   const stopReplay = useCallback(() => {

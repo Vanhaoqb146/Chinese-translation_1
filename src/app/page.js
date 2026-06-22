@@ -37,6 +37,7 @@ export default function HomePage() {
   const [tgtIdx, setTgtIdx] = useState(1);
   const [selectedModel, setSelectedModel] = useState(DEFAULT_TRANSLATION_MODEL);
   const [apiKey, setApiKey] = useState('');
+  const [context, setContext] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [sourceBlocks, setSourceBlocks] = useState([]);
   const [targetBlocks, setTargetBlocks] = useState([]);
@@ -133,6 +134,8 @@ export default function HomePage() {
         if (savedApiKey) setApiKey(savedApiKey);
         const savedModel = localStorage.getItem('vt_setting_selectedModel');
         if (savedModel) setSelectedModel(normalizeTranslationModel(savedModel));
+        const savedContext = localStorage.getItem('vt_setting_context');
+        if (savedContext) setContext(savedContext || '');
       } catch (e) {
         console.warn('Failed to load settings from localStorage:', e);
       }
@@ -174,6 +177,7 @@ export default function HomePage() {
     try {
       localStorage.setItem('vt_setting_apiKey', apiKey);
       localStorage.setItem('vt_setting_selectedModel', selectedModel);
+      localStorage.setItem('vt_setting_context', context);
       showToast('💾 Đã lưu cấu hình thành công');
       setShowSettings(false);
     } catch (e) {
@@ -261,7 +265,7 @@ export default function HomePage() {
 
     if (panel === 'source') {
       setSourceBlocks(prev => [...prev, { text: cleanText, type: 'final', id: Date.now() }]);
-      queueTranslation(cleanText, LANGUAGES[srcIdx].translateCode, LANGUAGES[tgtIdx].translateCode, { apiKey, engine: selectedModel },
+      queueTranslation(cleanText, LANGUAGES[srcIdx].translateCode, LANGUAGES[tgtIdx].translateCode, { apiKey, engine: selectedModel, context },
         async (origText, translated) => {
           setTargetBlocks(prev => [...prev, { text: translated, type: 'final', id: Date.now() }]);
           // Lưu lịch sử dịch
@@ -273,7 +277,7 @@ export default function HomePage() {
         });
     } else {
       setTargetBlocks(prev => [...prev, { text: cleanText, type: 'final', id: Date.now() }]);
-      queueTranslation(cleanText, LANGUAGES[tgtIdx].translateCode, LANGUAGES[srcIdx].translateCode, { apiKey, engine: selectedModel },
+      queueTranslation(cleanText, LANGUAGES[tgtIdx].translateCode, LANGUAGES[srcIdx].translateCode, { apiKey, engine: selectedModel, context },
         async (origText, translated) => {
           setSourceBlocks(prev => [...prev, { text: translated, type: 'final', id: Date.now() }]);
           // Lưu lịch sử dịch
@@ -369,6 +373,7 @@ export default function HomePage() {
       history={convHistory}
       setHistory={setConvHistory}
       sessionUser={sessionUser}
+      context={context}
     />
   );
 
@@ -385,6 +390,7 @@ export default function HomePage() {
       history={quickHistory}
       setHistory={setQuickHistory}
       sessionUser={sessionUser}
+      context={context}
     />
   );
 
@@ -401,6 +407,7 @@ export default function HomePage() {
       history={simHistory}
       setHistory={setSimHistory}
       sessionUser={sessionUser}
+      context={context}
     />
   );
 
@@ -485,6 +492,27 @@ export default function HomePage() {
               <select value={tgtIdx} onChange={(e) => setTgtIdx(Number(e.target.value))}>
                 {LANGUAGES.map((l, i) => <option key={i} value={i}>{l.flag} {l.name}</option>)}
               </select>
+            </div>
+            <div className="setting-row" style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+              <label>📝 Ngữ cảnh dịch nâng cao</label>
+              <textarea
+                value={context}
+                onChange={(e) => setContext(e.target.value)}
+                placeholder="Ví dụ: Đàm phán hợp đồng xi măng, xưng hô tôi - anh/chị lịch sự, dịch clinker giữ nguyên thuật ngữ kỹ thuật..."
+                rows={3}
+                style={{
+                  width: '100%',
+                  padding: '8px',
+                  borderRadius: '8px',
+                  background: 'rgba(255,255,255,0.05)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  color: 'var(--text)',
+                  fontFamily: 'inherit',
+                  fontSize: '13px',
+                  resize: 'vertical',
+                  outline: 'none',
+                }}
+              />
             </div>
             <div className="setting-row" style={{ marginTop: '10px' }}>
               <button 

@@ -108,6 +108,7 @@ export default function useQuickConversation({
   onStatusChange,
   onError,
   getVoiceForLang,
+  context = '',
 }) {
   const [isListening, setIsListening] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -148,6 +149,7 @@ export default function useQuickConversation({
   const autoTTSRef = useRef(autoTTS);
   const providerRef = useRef(provider);
   const speedRef = useRef(speed);
+  const contextRef = useRef(context);
 
   // Update refs synchronously during render to completely bypass React scheduling lags
   srcLangCodeRef.current = srcLangCode;
@@ -163,6 +165,7 @@ export default function useQuickConversation({
   autoTTSRef.current = autoTTS;
   providerRef.current = provider;
   speedRef.current = speed;
+  contextRef.current = context;
 
   // Khởi tạo Audio Element dùng chung để tránh block autoplay trên di động
   const getOrCreateTtsAudio = useCallback(() => {
@@ -256,6 +259,7 @@ export default function useQuickConversation({
           engine: engineRef.current,
           history: conversationHistoryRef.current,
           stream: true,
+          context: contextRef.current || '',
         }),
         signal: translateController.signal,
       });
