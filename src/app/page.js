@@ -494,12 +494,15 @@ export default function HomePage() {
               </select>
             </div>
             <div className="setting-row" style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-              <label>📝 Ngữ cảnh dịch nâng cao</label>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <label>📝 Ngữ cảnh dịch nâng cao</label>
+                <span style={{ fontSize: '11px', color: 'var(--text2)', opacity: 0.8 }}>💡 Nên nhập song ngữ Việt - Trung</span>
+              </div>
               <textarea
                 value={context}
                 onChange={(e) => setContext(e.target.value)}
-                placeholder="Ví dụ: Đàm phán hợp đồng xi măng, xưng hô tôi - anh/chị lịch sự, dịch clinker giữ nguyên thuật ngữ kỹ thuật..."
-                rows={3}
+                placeholder="Ví dụ: Hợp đồng xi măng / 水泥合同. Clinker -> 熟料. Xưng hô lịch sự / 礼貌."
+                rows={2}
                 style={{
                   width: '100%',
                   padding: '8px',
@@ -568,13 +571,35 @@ export default function HomePage() {
                   ))}
                   {interimText && activeMic === 'source' && <div className="sentence interim">{interimText}</div>}
                 </div>
-                <div className="panel-footer">
-                  <button className={`mic-btn ${activeMic === 'source' ? 'recording' : ''}`} onClick={() => toggleMic('source')}>
+                <div className="panel-footer" style={{ display: 'flex', gap: '10px', alignItems: 'center', width: '100%' }}>
+                  <button className={`mic-btn ${activeMic === 'source' ? 'recording' : ''}`} onClick={() => toggleMic('source')} style={{ flexShrink: 0 }}>
                     <span className="mic-icon">{activeMic === 'source' ? '⏹' : '🎤'}</span>
                     {activeMic === 'source' ? 'Dừng' : 'Nói'}
                   </button>
-                  {activeMic === 'source' && <span className="timer">{formatTime(sttSource.elapsed)}</span>}
-                  {isTranslating && <span className="translating-badge">⏳ Đang dịch...</span>}
+                  {activeMic !== 'source' && (
+                    <input 
+                      type="text" 
+                      placeholder="Hoặc nhập văn bản tại đây..."
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && e.target.value.trim()) {
+                          handleFinalResult(e.target.value, 'source');
+                          e.target.value = '';
+                        }
+                      }}
+                      style={{
+                        flex: 1,
+                        background: 'rgba(255,255,255,0.05)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '20px',
+                        padding: '8px 16px',
+                        color: 'var(--text)',
+                        fontSize: '13px',
+                        outline: 'none',
+                      }}
+                    />
+                  )}
+                  {activeMic === 'source' && <span className="timer" style={{ flexShrink: 0 }}>{formatTime(sttSource.elapsed)}</span>}
+                  {isTranslating && <span className="translating-badge" style={{ flexShrink: 0 }}>⏳ Đang dịch...</span>}
                 </div>
               </div>
 
